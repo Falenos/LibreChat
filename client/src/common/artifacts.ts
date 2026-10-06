@@ -4,6 +4,15 @@ export interface CodeBlock {
   content: string;
 }
 
+export interface ArtifactRevisionEntry {
+  id: string | null;
+  version: number;
+  available: boolean;
+  title?: string;
+  type?: string;
+  language?: string;
+}
+
 export interface Artifact {
   id: string;
   lastUpdateTime: number;
@@ -22,7 +31,7 @@ export interface Artifact {
     identifier: string;
     version: number;
   };
-  knaufUnavailableVersions?: number[];
+  knaufRevisionHistory?: ArtifactRevisionEntry[];
   // End [knauf]
 }
 

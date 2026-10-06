@@ -56,6 +56,12 @@ describe('Artifact root revision binding', () => {
   beforeEach(() => {
     mockGetArtifactRevisionHistory.mockReset();
     mockGetArtifactRevision.mockReset();
+    mockGetArtifactRevision.mockResolvedValue({
+      title: 'Versioning Probe',
+      type: 'application/vnd.react',
+      content: 'ROOT VERSION ONE',
+      version: 1,
+    });
     mockArtifactBody = 'EDITED VERSION TWO';
   });
 
@@ -66,14 +72,14 @@ describe('Artifact root revision binding', () => {
         {
           title: 'Versioning Probe',
           type: 'application/vnd.react',
-          content: 'ROOT VERSION ONE',
           version: 1,
+          available: true,
         },
         {
           title: 'Versioning Probe',
           type: 'application/vnd.react',
-          content: 'EDITED VERSION TWO',
           version: 2,
+          available: true,
         },
       ],
     });
@@ -127,14 +133,14 @@ describe('Artifact root revision binding', () => {
           {
             title: 'Versioning Probe',
             type: 'application/vnd.react',
-            content: 'ROOT VERSION ONE',
             version: 1,
+            available: true,
           },
           {
             title: 'Versioning Probe',
             type: 'application/vnd.react',
-            content: 'EDITED VERSION TWO',
             version: 2,
+            available: true,
           },
         ],
       })
@@ -144,20 +150,20 @@ describe('Artifact root revision binding', () => {
           {
             title: 'Versioning Probe',
             type: 'application/vnd.react',
-            content: 'ROOT VERSION ONE',
             version: 1,
+            available: true,
           },
           {
             title: 'Versioning Probe',
             type: 'application/vnd.react',
-            content: 'EDITED VERSION TWO',
             version: 2,
+            available: true,
           },
           {
             title: 'Versioning Probe',
             type: 'application/vnd.react',
-            content: 'EDITED VERSION THREE',
             version: 3,
+            available: true,
           },
         ],
       });
@@ -198,6 +204,60 @@ describe('Artifact root revision binding', () => {
     expect(screen.getByTestId('artifact-order')).toHaveTextContent(
       '["ROOT VERSION ONE","EDITED VERSION TWO","EDITED VERSION THREE"]',
     );
+  });
+
+  it('preserves loaded revision metadata across same-version source rerenders', async () => {
+    mockGetArtifactRevisionHistory.mockResolvedValue({
+      currentVersion: 2,
+      revisions: [
+        {
+          title: 'Versioning Probe',
+          type: 'application/vnd.react',
+          version: 1,
+          available: true,
+        },
+        {
+          title: 'Versioning Probe',
+          type: 'application/vnd.react',
+          version: 2,
+          available: true,
+        },
+      ],
+    });
+    const props = {
+      node: {},
+      id: 'ignored',
+      lastUpdateTime: 0,
+      identifier: 'versioning-probe',
+      title: 'Versioning Probe',
+      type: 'application/vnd.react',
+      version: '2',
+      children: <code>{'EDITED VERSION TWO'}</code>,
+    } as ComponentProps<typeof Artifact> & { version: string };
+
+    const { rerender } = render(
+      <RecoilRoot>
+        <Artifact {...props} />
+        <Registry />
+      </RecoilRoot>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('artifact-registry')).toHaveTextContent('knaufRevisionHistory'),
+    );
+
+    rerender(
+      <RecoilRoot>
+        <Artifact {...props}>
+          <code>{'EDITED VERSION TWO'}</code>
+        </Artifact>
+        <Registry />
+      </RecoilRoot>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('artifact-registry')).toHaveTextContent('knaufRevisionHistory'),
+    );
+    expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the root card on Version 1 when an older API pod lacks the history route', async () => {

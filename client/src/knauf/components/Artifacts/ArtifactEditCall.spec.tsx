@@ -1,10 +1,18 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { RecoilRoot, useRecoilValue, useSetRecoilState } from 'recoil';
 import store from '~/store';
 import ArtifactEditCall, { parseArtifactEditResult } from './ArtifactEditCall';
 
 const mockGetArtifactRevisionHistory = jest.fn();
 const mockGetArtifactRevision = jest.fn();
+
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
 
 jest.mock('~/knauf/data-provider/data-service', () => ({
   getArtifactRevision: (...args: unknown[]) => mockGetArtifactRevision(...args),
@@ -61,7 +69,7 @@ describe('ArtifactEditCall', () => {
     mockGetArtifactRevision.mockResolvedValue({
       title: 'Sales dashboard',
       type: 'application/vnd.react',
-      content: 'legacy exact snapshot',
+      content: 'export default function App() {}',
       version: 2,
     });
     mockGetArtifactRevisionHistory.mockResolvedValue({
@@ -70,14 +78,14 @@ describe('ArtifactEditCall', () => {
         {
           title: 'Sales dashboard',
           type: 'application/vnd.react',
-          content: 'root snapshot',
           version: 1,
+          available: true,
         },
         {
           title: 'Sales dashboard',
           type: 'application/vnd.react',
-          content: 'export default function App() {}',
           version: 2,
+          available: true,
         },
       ],
     });
@@ -182,7 +190,7 @@ describe('ArtifactEditCall', () => {
         'artifact-revision:message-1:dashboard:version:2:true',
       ),
     );
-    expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(1);
+    expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(2);
   });
 
   it('opens distinct immutable snapshots for historical version cards', async () => {
@@ -192,23 +200,31 @@ describe('ArtifactEditCall', () => {
         {
           title: 'Sales dashboard',
           type: 'application/vnd.react',
-          content: 'root snapshot',
           version: 1,
+          available: true,
         },
         {
           title: 'Sales dashboard',
           type: 'application/vnd.react',
-          content: 'green snapshot',
           version: 2,
+          available: true,
         },
         {
           title: 'Sales dashboard',
           type: 'application/vnd.react',
-          content: 'pink snapshot',
           version: 3,
+          available: true,
         },
       ],
     });
+    mockGetArtifactRevision.mockImplementation(({ version }: { version: number }) =>
+      Promise.resolve({
+        title: 'Sales dashboard',
+        type: 'application/vnd.react',
+        content: version === 2 ? 'green snapshot' : 'pink snapshot',
+        version,
+      }),
+    );
 
     render(
       <RecoilRoot initializeState={({ set }) => set(store.artifactsVisibility, false)}>
@@ -231,7 +247,86 @@ describe('ArtifactEditCall', () => {
     fireEvent.click(cards[1]);
     await waitFor(() => expect(screen.getByTestId('selection')).toHaveTextContent('pink snapshot'));
     expect(screen.getByTestId('selection')).toHaveTextContent('version:3');
-    expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(1);
+    expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the last clicked version when earlier snapshot requests finish later', async () => {
+    mockGetArtifactRevisionHistory.mockResolvedValue({
+      currentVersion: 3,
+      revisions: [
+        {
+          title: 'Sales dashboard',
+          type: 'application/vnd.react',
+          version: 1,
+          available: true,
+        },
+        {
+          title: 'Sales dashboard',
+          type: 'application/vnd.react',
+          version: 2,
+          available: true,
+        },
+        {
+          title: 'Sales dashboard',
+          type: 'application/vnd.react',
+          version: 3,
+          available: true,
+        },
+      ],
+    });
+    const versionTwo = deferred<{
+      title: string;
+      type: string;
+      content: string;
+      version: number;
+    }>();
+    const versionThree = deferred<{
+      title: string;
+      type: string;
+      content: string;
+      version: number;
+    }>();
+    mockGetArtifactRevision.mockImplementation(({ version }: { version: number }) =>
+      version === 2 ? versionTwo.promise : versionThree.promise,
+    );
+
+    render(
+      <RecoilRoot initializeState={({ set }) => set(store.artifactsVisibility, false)}>
+        <ArtifactEditCall result={parseArtifactEditResult(output)!} />
+        <ArtifactEditCall
+          result={parseArtifactEditResult(JSON.stringify({ ...JSON.parse(output), version: 3 }))!}
+        />
+        <Selection />
+      </RecoilRoot>,
+    );
+
+    const cards = screen.getAllByRole('button', {
+      name: 'com_ui_updated_file:Sales dashboard',
+    });
+    fireEvent.click(cards[0]);
+    await waitFor(() => expect(mockGetArtifactRevision).toHaveBeenCalledTimes(1));
+    fireEvent.click(cards[1]);
+    await waitFor(() => expect(mockGetArtifactRevision).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      versionThree.resolve({
+        title: 'Sales dashboard',
+        type: 'application/vnd.react',
+        content: 'pink snapshot',
+        version: 3,
+      });
+    });
+    await waitFor(() => expect(screen.getByTestId('selection')).toHaveTextContent('pink snapshot'));
+
+    await act(async () => {
+      versionTwo.resolve({
+        title: 'Sales dashboard',
+        type: 'application/vnd.react',
+        content: 'green snapshot',
+        version: 2,
+      });
+    });
+    expect(screen.getByTestId('selection')).toHaveTextContent('version:3:true:pink snapshot');
   });
 
   it('reports an unavailable historical version instead of substituting another snapshot', async () => {
@@ -243,8 +338,8 @@ describe('ArtifactEditCall', () => {
         {
           title: 'Sales dashboard',
           type: 'application/vnd.react',
-          content: 'pink snapshot',
           version: 3,
+          available: true,
         },
       ],
     });
@@ -264,6 +359,12 @@ describe('ArtifactEditCall', () => {
 
   it('falls back to the exact revision endpoint during a rolling API deployment', async () => {
     mockGetArtifactRevisionHistory.mockRejectedValue({ response: { status: 404 } });
+    mockGetArtifactRevision.mockResolvedValue({
+      title: 'Sales dashboard',
+      type: 'application/vnd.react',
+      content: 'legacy exact snapshot',
+      version: 2,
+    });
 
     render(
       <RecoilRoot initializeState={({ set }) => set(store.artifactsVisibility, false)}>

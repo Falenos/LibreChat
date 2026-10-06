@@ -130,6 +130,37 @@ class ArtifactExportRequestError extends Error {
   }
 }
 
+const parseArtifactExportErrorPayload = async (
+  error: unknown,
+): Promise<{ message?: unknown; code?: unknown; details?: unknown } | null> => {
+  const data = axios.isAxiosError(error) ? error.response?.data : undefined;
+  if (!(data instanceof Blob) || !data.type.includes('json')) {
+    return null;
+  }
+  try {
+    return JSON.parse(await data.text()) as {
+      message?: unknown;
+      code?: unknown;
+      details?: unknown;
+    };
+  } catch {
+    return null;
+  }
+};
+
+const toArtifactExportRequestError = (payload: {
+  message?: unknown;
+  code?: unknown;
+  details?: unknown;
+}) =>
+  new ArtifactExportRequestError(
+    typeof payload.message === 'string' ? payload.message : 'Artifact export failed',
+    typeof payload.code === 'string' ? payload.code : undefined,
+    payload.details != null && typeof payload.details === 'object'
+      ? (payload.details as Record<string, unknown>)
+      : undefined,
+  );
+
 export async function postArtifactExport(
   artifact: ArtifactExportSnapshot,
   format: 'png' | 'pdf',
@@ -143,21 +174,9 @@ export async function postArtifactExport(
     );
     return response.data;
   } catch (error) {
-    const data = axios.isAxiosError(error) ? error.response?.data : undefined;
-    if (data instanceof Blob && data.type.includes('json')) {
-      let payload: { message?: unknown; code?: unknown; details?: unknown };
-      try {
-        payload = JSON.parse(await data.text()) as typeof payload;
-      } catch {
-        throw error;
-      }
-      throw new ArtifactExportRequestError(
-        typeof payload.message === 'string' ? payload.message : 'Artifact export failed',
-        typeof payload.code === 'string' ? payload.code : undefined,
-        payload.details != null && typeof payload.details === 'object'
-          ? (payload.details as Record<string, unknown>)
-          : undefined,
-      );
+    const payload = await parseArtifactExportErrorPayload(error);
+    if (payload != null) {
+      throw toArtifactExportRequestError(payload);
     }
     throw error;
   }
@@ -182,7 +201,13 @@ export interface ArtifactRevisionSnapshot extends ArtifactExportSnapshot {
 }
 
 export type ArtifactRevisionHistoryItem =
-  | ArtifactRevisionSnapshot
+  | {
+      title: string;
+      type: string;
+      language?: string;
+      version: number;
+      available: true;
+    }
   | { version: number; available: false };
 
 export interface ArtifactRevisionHistory {

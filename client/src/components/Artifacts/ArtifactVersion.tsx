@@ -8,12 +8,14 @@ import { useLocalize } from '~/hooks';
 interface ArtifactVersionProps {
   currentIndex: number;
   versions: Array<{ version: number; available: boolean }>;
+  isLoading?: boolean;
   onVersionChange: (index: number) => void;
 }
 
 export default function ArtifactVersion({
   currentIndex,
   versions,
+  isLoading = false,
   onVersionChange,
 }: ArtifactVersionProps) {
   const localize = useLocalize();
@@ -47,7 +49,7 @@ export default function ArtifactVersion({
       label: option.label,
       onClick: () => handleValueChange(option.value),
       value: option.value,
-      disabled: !option.available,
+      disabled: !option.available || isLoading,
       icon: isSelected ? (
         <Check size={16} className="text-text-primary" aria-hidden="true" />
       ) : undefined,
@@ -70,6 +72,8 @@ export default function ArtifactVersion({
               size="icon"
               variant="ghost"
               asChild
+              disabled={isLoading}
+              aria-busy={isLoading}
               aria-label={localize('com_ui_change_version')}
             >
               <MenuButton>

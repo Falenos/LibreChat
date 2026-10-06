@@ -7,6 +7,11 @@ jest.mock('~/Providers', () => ({
   useArtifactsContext: jest.fn(),
 }));
 
+const mockGetArtifactRevision = jest.fn();
+jest.mock('~/knauf/data-provider/data-service', () => ({
+  getArtifactRevision: (...args: unknown[]) => mockGetArtifactRevision(...args),
+}));
+
 jest.mock('~/utils', () => ({
   logger: {
     log: jest.fn(),
@@ -18,6 +23,7 @@ jest.mock('~/store', () => ({
   __esModule: true,
   default: {
     artifactsState: { key: 'artifactsState' },
+    visibleArtifacts: { key: 'visibleArtifacts' },
     currentArtifactId: { key: 'currentArtifactId' },
     artifactsVisibility: { key: 'artifactsVisibility' },
   },
@@ -30,12 +36,13 @@ jest.mock('recoil', () => {
     useRecoilValue: jest.fn(),
     useRecoilState: jest.fn(),
     useResetRecoilState: jest.fn(),
+    useSetRecoilState: jest.fn(),
   };
 });
 
 /** Import mocked functions after mocking */
 import { useArtifactsContext } from '~/Providers';
-import { useRecoilValue, useRecoilState, useResetRecoilState } from 'recoil';
+import { useRecoilValue, useRecoilState, useResetRecoilState, useSetRecoilState } from 'recoil';
 import { logger } from '~/utils';
 import useArtifacts from '../useArtifacts';
 
@@ -43,6 +50,8 @@ describe('useArtifacts', () => {
   const mockResetArtifacts = jest.fn();
   const mockResetCurrentArtifactId = jest.fn();
   const mockSetCurrentArtifactId = jest.fn();
+  const mockSetArtifacts = jest.fn();
+  const mockSetVisibleArtifacts = jest.fn();
 
   const createArtifact = (partial: Partial<Artifact>): Artifact => ({
     id: 'artifact-1',
@@ -64,10 +73,14 @@ describe('useArtifacts', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    mockGetArtifactRevision.mockReset();
 
     (useArtifactsContext as jest.Mock).mockReturnValue(defaultContext);
     (useRecoilValue as jest.Mock).mockReturnValue({});
     (useRecoilState as jest.Mock).mockReturnValue([null, mockSetCurrentArtifactId]);
+    (useSetRecoilState as jest.Mock).mockImplementation((atom) =>
+      atom?.key === 'visibleArtifacts' ? mockSetVisibleArtifacts : mockSetArtifacts,
+    );
     (useResetRecoilState as jest.Mock).mockImplementation((atom) => {
       if (atom?.key === 'artifactsState') {
         return mockResetArtifacts;
@@ -592,6 +605,63 @@ describe('useArtifacts', () => {
         { id: 'dashboard-v2', version: 2, available: true },
         { id: 'dashboard-v3', version: 3, available: true },
       ]);
+    });
+
+    it('loads an uncached selected revision without hydrating every snapshot', async () => {
+      const history = [
+        {
+          id: 'dashboard-v1',
+          version: 1,
+          available: true,
+          title: 'Sales dashboard',
+          type: 'application/vnd.react',
+        },
+        {
+          id: 'dashboard-v2',
+          version: 2,
+          available: true,
+          title: 'Revenue dashboard',
+          type: 'application/vnd.react',
+        },
+      ];
+      const artifacts = {
+        'dashboard-v2': createArtifact({
+          id: 'dashboard-v2',
+          title: 'Revenue dashboard',
+          lastUpdateTime: 2000,
+          knaufRevision: { identifier: 'dashboard', version: 2 },
+          knaufRevisionHistory: history,
+        }),
+      };
+      (useRecoilValue as jest.Mock).mockImplementation((atom) =>
+        atom?.key === 'artifactsState' ? artifacts : {},
+      );
+      (useRecoilState as jest.Mock).mockReturnValue(['dashboard-v2', mockSetCurrentArtifactId]);
+      mockGetArtifactRevision.mockResolvedValue({
+        title: 'Sales dashboard',
+        type: 'application/vnd.react',
+        content: 'version one',
+        version: 1,
+      });
+      const { result } = renderHook(() => useArtifacts());
+
+      await act(async () => {
+        await result.current.selectArtifactVersion(0);
+      });
+
+      expect(mockGetArtifactRevision).toHaveBeenCalledWith({
+        messageId: 'msg-1',
+        identifier: 'dashboard',
+        version: 1,
+      });
+      const register = mockSetArtifacts.mock.calls[mockSetArtifacts.mock.calls.length - 1]?.[0] as (
+        current: Record<string, Artifact>,
+      ) => Record<string, Artifact>;
+      expect(register(artifacts)['dashboard-v1']).toMatchObject({
+        content: 'version one',
+        knaufRevisionHistory: history,
+      });
+      expect(mockSetCurrentArtifactId).toHaveBeenCalledWith('dashboard-v1');
     });
     // End [knauf]
 

@@ -21,7 +21,9 @@ import {
   artifactRevisionId,
   artifactRootId,
   isArtifactRevisionHistoryUnavailable,
+  mergeArtifactRevisionRegistry,
   projectArtifactRevisionHistory,
+  projectArtifactRevisionSnapshot,
 } from '~/knauf/utils/artifactRevisions';
 // End [knauf]
 import ArtifactButton from './ArtifactButton';
@@ -72,7 +74,7 @@ export function Artifact({
   const setVisibleArtifacts = useSetRecoilState(visibleArtifacts);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   // [knauf] NO-TICKET — keep Version 1's sort position stable across later revisions.
-  const rootRevisionTimeRef = useRef<{ artifactKey: string; time: number } | null>(null);
+  const rootRevisionTimeRef = useRef<{ lineageKey: string; time: number } | null>(null);
   const historyRequestRef = useRef(0);
   const loadedHistoryRef = useRef<string | null>(null);
   // End [knauf]
@@ -122,16 +124,19 @@ export function Artifact({
       };
 
       // [knauf] KK20-410 — the backend advances the source message in place but
-      // retains inverse patches. Hydrate every reconstructable snapshot in one
-      // authenticated read so the selector does not depend on which chat cards
-      // happened to mount or get clicked.
+      // retains inverse patches. Hydrate bounded lineage metadata, then fetch
+      // only V1 for this source card; other exact snapshots load on selection.
       if (version > 1 && isArtifactRoute(location.pathname)) {
         const revisionId = artifactRevisionId({ messageId, identifier, version });
         const latest = { ...currentArtifact, id: revisionId };
-        const historyKey = `${messageId}:${identifier}:${version}`;
+        const lineageKey = `${messageId}:${identifier}`;
+        const historyKey = `${lineageKey}:${version}:${title}:${type}`;
         const registerLatest = (artifacts: Record<string, Artifact | undefined> | null) => ({
           ...artifacts,
-          [revisionId]: latest,
+          [revisionId]: {
+            ...latest,
+            knaufRevisionHistory: artifacts?.[revisionId]?.knaufRevisionHistory,
+          },
         });
         setArtifacts(registerLatest);
         setVisibleArtifacts(registerLatest);
@@ -142,26 +147,50 @@ export function Artifact({
         loadedHistoryRef.current = historyKey;
         const requestId = ++historyRequestRef.current;
         void getArtifactRevisionHistory({ messageId, identifier })
-          .then((history) => {
+          .then(async (history) => {
             if (requestId !== historyRequestRef.current) {
               return;
             }
             const previousRoot = rootRevisionTimeRef.current;
             const rootRevisionTime =
-              previousRoot?.artifactKey === artifactKey ? previousRoot.time : now - 1;
-            rootRevisionTimeRef.current = { artifactKey, time: rootRevisionTime };
-            const { artifacts: revisions } = projectArtifactRevisionHistory({
+              previousRoot?.lineageKey === lineageKey ? previousRoot.time : now - 1;
+            rootRevisionTimeRef.current = { lineageKey, time: rootRevisionTime };
+            const revisionHistory = projectArtifactRevisionHistory({
               history,
-              base: currentArtifact,
-              rootTime: rootRevisionTime,
+              messageId,
+              identifier,
             });
+            const latestWithHistory = { ...latest, knaufRevisionHistory: revisionHistory };
+            const rootRevision = revisionHistory.find(
+              (revision) => revision.available && revision.version === 1,
+            );
+            const original = rootRevision
+              ? projectArtifactRevisionSnapshot({
+                  snapshot: await getArtifactRevision({
+                    messageId,
+                    identifier,
+                    version: 1,
+                  }),
+                  base: currentArtifact,
+                  rootTime: rootRevisionTime,
+                  history: revisionHistory,
+                })
+              : null;
+            if (requestId !== historyRequestRef.current) {
+              return;
+            }
             const registerHistory = (artifacts: Record<string, Artifact | undefined> | null) => ({
-              ...artifacts,
-              ...revisions,
+              ...mergeArtifactRevisionRegistry({
+                current: artifacts,
+                additions: original ? [latestWithHistory, original] : [latestWithHistory],
+                messageId,
+                identifier,
+                history: revisionHistory,
+              }),
             });
             setArtifacts(registerHistory);
             setVisibleArtifacts(registerHistory);
-            setArtifact(revisions[artifactKey] ?? revisions[revisionId] ?? latest);
+            setArtifact(original ?? latestWithHistory);
           })
           .catch(async (error) => {
             if (requestId !== historyRequestRef.current) {
@@ -180,19 +209,42 @@ export function Artifact({
               if (requestId !== historyRequestRef.current) {
                 return;
               }
-              const original = {
-                ...currentArtifact,
-                ...snapshot,
-                id: artifactKey,
-                lastUpdateTime: now - 1,
-                knaufRevision: { identifier, version: 1 },
-              };
-              const registerOriginal = (
-                artifacts: Record<string, Artifact | undefined> | null,
-              ) => ({
-                ...artifacts,
-                [artifactKey]: original,
+              const fallbackHistory = [
+                {
+                  id: artifactKey,
+                  version: 1,
+                  available: true,
+                  title: snapshot.title,
+                  type: snapshot.type,
+                  language: snapshot.language,
+                },
+                {
+                  id: revisionId,
+                  version,
+                  available: true,
+                  title,
+                  type,
+                  language: currentArtifact.language,
+                },
+              ];
+              const original = projectArtifactRevisionSnapshot({
+                snapshot,
+                base: currentArtifact,
+                rootTime: now - 1,
+                history: fallbackHistory,
               });
+              const latestWithHistory = {
+                ...latest,
+                knaufRevisionHistory: fallbackHistory,
+              };
+              const registerOriginal = (artifacts: Record<string, Artifact | undefined> | null) =>
+                mergeArtifactRevisionRegistry({
+                  current: artifacts,
+                  additions: [latestWithHistory, original],
+                  messageId,
+                  identifier,
+                  history: fallbackHistory,
+                });
               setArtifacts(registerOriginal);
               setVisibleArtifacts(registerOriginal);
               setArtifact(original);

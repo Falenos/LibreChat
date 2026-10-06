@@ -12,7 +12,7 @@ const TOOL_NAME = 'edit_artifact';
 const MAX_REPLACEMENTS = 25;
 const MAX_REPLACEMENT_BYTES = 512 * 1024;
 const MAX_CONTEXT_ARTIFACTS = 10;
-const MAX_ARTIFACT_REVISIONS = 250;
+const MAX_ARTIFACT_REVISIONS = 10_000;
 
 class ArtifactEditError extends Error {
   constructor(message, code, status = 400) {
@@ -265,7 +265,11 @@ async function applyArtifactEdit(input, deps) {
   }
   // End [knauf]
 
-  const version = readVersion(target.boundary) + 1;
+  const currentVersion = readVersion(target.boundary);
+  if (currentVersion >= MAX_ARTIFACT_REVISIONS) {
+    throw new ArtifactEditError('Artifact revision limit reached', 'revision_limit_reached', 409);
+  }
+  const version = currentVersion + 1;
   workingMessage = withVersion(
     workingMessage,
     findAllArtifacts(workingMessage)[target.artifactIndex],
@@ -356,6 +360,12 @@ const readStoredRevisions = (messages, messageId, identifier) => {
   return revisions;
 };
 
+const readRevisionTitle = (revisions, version, fallback) => {
+  const storedTitle =
+    revisions.get(version)?.title ?? (version === 1 ? revisions.get(2)?.title : undefined);
+  return typeof storedTitle === 'string' && storedTitle.length > 0 ? storedTitle : fallback;
+};
+
 function getArtifactRevisionSnapshot(messages, { messageId, identifier, version }) {
   if (!Number.isSafeInteger(version) || version < 1) {
     throw new ArtifactEditError('A valid artifact version is required', 'invalid_version');
@@ -367,6 +377,13 @@ function getArtifactRevisionSnapshot(messages, { messageId, identifier, version 
   }
 
   const currentVersion = readVersion(target.boundary);
+  if (currentVersion > MAX_ARTIFACT_REVISIONS) {
+    throw new ArtifactEditError(
+      'Artifact version history is too large',
+      'revision_history_too_large',
+      413,
+    );
+  }
   if (version > currentVersion) {
     throw new ArtifactEditError('Artifact version not found', 'revision_not_found', 404);
   }
@@ -396,7 +413,11 @@ function getArtifactRevisionSnapshot(messages, { messageId, identifier, version 
   }
 
   return {
-    title: readAttribute(target.boundary, 'title') || identifier,
+    title: readRevisionTitle(
+      revisions,
+      version,
+      readAttribute(target.boundary, 'title') || identifier,
+    ),
     type: readAttribute(target.boundary, 'type'),
     content,
     version,
@@ -413,7 +434,7 @@ function getArtifactRevisionHistory(messages, { messageId, identifier }) {
     throw new ArtifactEditError('Artifact not found', 'artifact_not_found', 404);
   }
 
-  const title = readAttribute(target.boundary, 'title') || identifier;
+  const latestTitle = readAttribute(target.boundary, 'title') || identifier;
   const type = readAttribute(target.boundary, 'type');
   const language = readAttribute(target.boundary, 'language');
   const currentVersion = readVersion(target.boundary);
@@ -433,10 +454,10 @@ function getArtifactRevisionHistory(messages, { messageId, identifier }) {
     snapshots.unshift(
       historyAvailable
         ? {
-            title,
+            title: readRevisionTitle(revisions, version, latestTitle),
             type,
-            content,
             version,
+            available: true,
             ...(language ? { language } : {}),
           }
         : { version, available: false },

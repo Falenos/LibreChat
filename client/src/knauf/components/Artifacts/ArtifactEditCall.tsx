@@ -9,8 +9,13 @@ import {
 } from '~/knauf/data-provider/data-service';
 import {
   artifactRevisionId,
+  beginArtifactRevisionOpen,
+  finishArtifactRevisionOpen,
+  isCurrentArtifactRevisionOpen,
   isArtifactRevisionHistoryUnavailable,
+  mergeArtifactRevisionRegistry,
   projectArtifactRevisionHistory,
+  projectArtifactRevisionSnapshot,
 } from '~/knauf/utils/artifactRevisions';
 import store from '~/store';
 import { getFileType } from '~/utils';
@@ -56,64 +61,105 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
   const setArtifactsVisible = useSetRecoilState(store.artifactsVisibility);
   const revisionId = artifactRevisionId(result);
 
-  const openArtifact = (artifact: Artifact) => {
-    setArtifacts((current) => ({ ...(current ?? {}), [artifact.id]: artifact }));
-    setVisibleArtifacts((current) => ({ ...(current ?? {}), [artifact.id]: artifact }));
-    setCurrentArtifactId(artifact.id);
-    setArtifactsVisible(true);
-  };
-
   const handleOpen = async () => {
-    const cached = artifacts?.[revisionId] ?? visibleArtifacts?.[revisionId];
-    if (cached?.knaufUnavailableVersions != null) {
-      openArtifact(cached);
-      return;
-    }
-
+    const lineage = { messageId: result.messageId, identifier: result.identifier };
+    const requestId = beginArtifactRevisionOpen(lineage);
     setFailed(false);
     setIsLoading(true);
     try {
       const history = await getArtifactRevisionHistory(result);
-      const { artifacts: revisions } = projectArtifactRevisionHistory({
+      if (!isCurrentArtifactRevisionOpen(lineage, requestId)) {
+        return;
+      }
+      const revisionHistory = projectArtifactRevisionHistory({
         history,
-        base: {
-          identifier: result.identifier,
-          messageId: result.messageId,
-        },
-        rootTime: Date.now() - history.currentVersion,
+        ...lineage,
       });
-      const selected = revisions[revisionId];
-      if (!selected) {
+      const metadata = revisionHistory.find(
+        (revision) => revision.available && revision.id === revisionId,
+      );
+      if (!metadata) {
         setFailed(true);
         return;
       }
-      setArtifacts((current) => ({ ...(current ?? {}), ...revisions }));
-      setVisibleArtifacts((current) => ({ ...(current ?? {}), ...revisions }));
+      const cached = artifacts?.[revisionId] ?? visibleArtifacts?.[revisionId];
+      const selected =
+        cached?.content != null
+          ? {
+              ...cached,
+              title: metadata.title ?? cached.title,
+              type: metadata.type ?? cached.type,
+              language: metadata.language ?? cached.language,
+              knaufRevisionHistory: revisionHistory,
+            }
+          : projectArtifactRevisionSnapshot({
+              snapshot: await getArtifactRevision(result),
+              base: lineage,
+              rootTime: Date.now() - history.currentVersion,
+              history: revisionHistory,
+            });
+      if (!isCurrentArtifactRevisionOpen(lineage, requestId)) {
+        return;
+      }
+      const register = (current: Record<string, Artifact | undefined> | null) =>
+        mergeArtifactRevisionRegistry({
+          current,
+          additions: [selected],
+          ...lineage,
+          history: revisionHistory,
+        });
+      setArtifacts(register);
+      setVisibleArtifacts(register);
       setCurrentArtifactId(selected.id);
       setArtifactsVisible(true);
     } catch (error) {
+      if (!isCurrentArtifactRevisionOpen(lineage, requestId)) {
+        return;
+      }
       if (!isArtifactRevisionHistoryUnavailable(error)) {
         setFailed(true);
         return;
       }
       try {
         const snapshot = await getArtifactRevision(result);
-        openArtifact({
-          id: revisionId,
-          identifier: result.identifier,
-          messageId: result.messageId,
-          title: snapshot.title,
-          type: snapshot.type,
-          content: snapshot.content,
-          language: snapshot.language,
-          lastUpdateTime: Date.now(),
-          knaufRevision: { identifier: result.identifier, version: result.version },
+        if (!isCurrentArtifactRevisionOpen(lineage, requestId)) {
+          return;
+        }
+        const fallbackHistory = [
+          {
+            id: revisionId,
+            version: result.version,
+            available: true,
+            title: snapshot.title,
+            type: snapshot.type,
+            language: snapshot.language,
+          },
+        ];
+        const selected = projectArtifactRevisionSnapshot({
+          snapshot,
+          base: lineage,
+          rootTime: Date.now() - result.version,
+          history: fallbackHistory,
         });
+        const register = (current: Record<string, Artifact | undefined> | null) =>
+          mergeArtifactRevisionRegistry({
+            current,
+            additions: [selected],
+            ...lineage,
+            history: fallbackHistory,
+          });
+        setArtifacts(register);
+        setVisibleArtifacts(register);
+        setCurrentArtifactId(selected.id);
+        setArtifactsVisible(true);
       } catch {
-        setFailed(true);
+        if (isCurrentArtifactRevisionOpen(lineage, requestId)) {
+          setFailed(true);
+        }
       }
     } finally {
       setIsLoading(false);
+      finishArtifactRevisionOpen(lineage, requestId);
     }
   };
 

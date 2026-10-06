@@ -99,8 +99,10 @@ export default function Artifacts() {
     currentArtifact,
     // [knauf] KK20-410 — traverse only the selected artifact's persisted revision lineage.
     artifactVersions,
+    artifactVersionError,
+    isArtifactVersionLoading,
+    selectArtifactVersion,
     // End [knauf]
-    setCurrentArtifactId,
   } = useArtifacts();
 
   /* Office artifacts have no source view, and source-code artifacts have
@@ -330,18 +332,21 @@ export default function Artifacts() {
               {artifactVersions.length > 1 && (
                 <ArtifactVersion
                   currentIndex={currentIndex}
+                  isLoading={isArtifactVersionLoading}
                   versions={artifactVersions.map(({ version, available }) => ({
                     version,
                     available,
                   }))}
                   onVersionChange={(index) => {
-                    const target = artifactVersions[index]?.id;
-                    if (target) {
-                      setCurrentArtifactId(target);
-                    }
+                    void selectArtifactVersion(index);
                   }}
                 />
               )}
+              {artifactVersionError ? (
+                <span role="alert" className="text-xs text-red-600">
+                  {localize('com_ui_error')}
+                </span>
+              ) : null}
               {/* End [knauf] */}
               <CopyButton isCopied={isCopied} iconOnly onClick={handleCopyArtifact} />
               {/* [knauf] Source + rendered PNG/PDF exports share one menu. (NO-TICKET) */}

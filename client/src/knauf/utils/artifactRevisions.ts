@@ -1,5 +1,8 @@
-import type { Artifact } from '~/common';
-import type { ArtifactRevisionHistory } from '~/knauf/data-provider/data-service';
+import type { Artifact, ArtifactRevisionEntry } from '~/common';
+import type {
+  ArtifactRevisionHistory,
+  ArtifactRevisionSnapshot,
+} from '~/knauf/data-provider/data-service';
 
 const isUnavailableRevision = (
   snapshot: ArtifactRevisionHistory['revisions'][number],
@@ -36,43 +39,117 @@ export const isArtifactRevisionHistoryUnavailable = (error: unknown) => {
   return candidate?.status === 404 || candidate?.response?.status === 404;
 };
 
+let nextOpenRequestId = 0;
+const activeOpenRequests = new Map<string, number>();
+
+const artifactLineageKey = ({ messageId, identifier }: { messageId: string; identifier: string }) =>
+  `${messageId}\0${identifier}`;
+
+export const beginArtifactRevisionOpen = (lineage: { messageId: string; identifier: string }) => {
+  const requestId = ++nextOpenRequestId;
+  activeOpenRequests.set(artifactLineageKey(lineage), requestId);
+  return requestId;
+};
+
+export const isCurrentArtifactRevisionOpen = (
+  lineage: { messageId: string; identifier: string },
+  requestId: number,
+) => activeOpenRequests.get(artifactLineageKey(lineage)) === requestId;
+
+export const finishArtifactRevisionOpen = (
+  lineage: { messageId: string; identifier: string },
+  requestId: number,
+) => {
+  const key = artifactLineageKey(lineage);
+  if (activeOpenRequests.get(key) === requestId) {
+    activeOpenRequests.delete(key);
+  }
+};
+
 export const projectArtifactRevisionHistory = ({
   history,
-  base,
-  rootTime,
+  messageId,
+  identifier,
 }: {
   history: ArtifactRevisionHistory;
+  messageId: string;
+  identifier: string;
+}): ArtifactRevisionEntry[] =>
+  history.revisions.map((revision) => {
+    if (isUnavailableRevision(revision)) {
+      return { id: null, version: revision.version, available: false };
+    }
+    return {
+      ...revision,
+      id:
+        revision.version === 1
+          ? artifactRootId({
+              identifier,
+              messageId,
+              title: revision.title,
+              type: revision.type,
+            })
+          : artifactRevisionId({ messageId, identifier, version: revision.version }),
+    };
+  });
+
+export const projectArtifactRevisionSnapshot = ({
+  snapshot,
+  base,
+  rootTime,
+  history,
+}: {
+  snapshot: ArtifactRevisionSnapshot;
   base: Pick<Artifact, 'identifier' | 'messageId' | 'index'>;
   rootTime: number;
-}) => {
+  history: ArtifactRevisionEntry[];
+}): Artifact => {
   const identifier = base.identifier ?? '';
   const messageId = base.messageId ?? '';
-  const unavailableVersions = history.revisions
-    .filter(isUnavailableRevision)
-    .map(({ version }) => version);
-  const artifacts = history.revisions.reduce<Record<string, Artifact>>((registered, snapshot) => {
-    if (isUnavailableRevision(snapshot)) {
-      return registered;
-    }
-    const id =
-      snapshot.version === 1
-        ? artifactRootId({
-            identifier,
-            messageId,
-            title: snapshot.title,
-            type: snapshot.type,
-          })
-        : artifactRevisionId({ messageId, identifier, version: snapshot.version });
-    registered[id] = {
-      ...base,
-      ...snapshot,
-      id,
-      lastUpdateTime: rootTime + snapshot.version - 1,
-      knaufRevision: { identifier, version: snapshot.version },
-      knaufUnavailableVersions: unavailableVersions,
-    };
-    return registered;
-  }, {});
+  const metadata = history.find(
+    (revision) => revision.available && revision.version === snapshot.version,
+  );
+  const id =
+    metadata?.id ??
+    (snapshot.version === 1
+      ? artifactRootId({
+          identifier,
+          messageId,
+          title: snapshot.title,
+          type: snapshot.type,
+        })
+      : artifactRevisionId({ messageId, identifier, version: snapshot.version }));
+  return {
+    ...base,
+    ...snapshot,
+    id,
+    lastUpdateTime: rootTime + snapshot.version - 1,
+    knaufRevision: { identifier, version: snapshot.version },
+    knaufRevisionHistory: history,
+  };
+};
 
-  return { artifacts, unavailableVersions };
+export const mergeArtifactRevisionRegistry = ({
+  current,
+  additions,
+  messageId,
+  identifier,
+  history,
+}: {
+  current: Record<string, Artifact | undefined> | null;
+  additions: Artifact[];
+  messageId: string;
+  identifier: string;
+  history: ArtifactRevisionEntry[];
+}) => {
+  const merged = { ...current };
+  for (const [id, artifact] of Object.entries(merged)) {
+    if (artifact?.messageId === messageId && artifact.knaufRevision?.identifier === identifier) {
+      merged[id] = { ...artifact, knaufRevisionHistory: history };
+    }
+  }
+  for (const artifact of additions) {
+    merged[artifact.id] = artifact;
+  }
+  return merged;
 };

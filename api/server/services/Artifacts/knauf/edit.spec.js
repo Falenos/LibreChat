@@ -159,6 +159,34 @@ describe('edit_artifact', () => {
     expect(compareAndSwap.mock.calls[0][0].updated).not.toContain('version="5"');
   });
 
+  test('rejects an edit before creating a revision the history API cannot serve', async () => {
+    const source = 'export default function Report() { return <p>limit</p>; }';
+    const message = {
+      messageId: 'assistant-report',
+      conversationId: 'conversation-1',
+      user: 'user-1',
+      text: artifact('report', source).replace('title="Demo"', 'title="Demo" version="10000"'),
+    };
+    const compareAndSwap = jest.fn();
+
+    await expect(
+      applyArtifactEdit(
+        {
+          userId: 'user-1',
+          conversationId: 'conversation-1',
+          identifier: 'report',
+          expectedSha256: sha256(source),
+          replacements: [{ old: 'limit', new: 'overflow' }],
+        },
+        {
+          getMessages: jest.fn().mockResolvedValue([message]),
+          compareAndSwap,
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'revision_limit_reached', status: 409 });
+    expect(compareAndSwap).not.toHaveBeenCalled();
+  });
+
   test('ART-EDIT-009 preserves imports, styles, and icons outside a minimal model edit', async () => {
     const source = `import { Card } from '/components/ui/card';
 
@@ -302,17 +330,116 @@ export default function Dashboard() {
         {
           title: 'Demo',
           type: 'application/vnd.react',
-          content: 'The theme colour is pink.',
           version: 3,
+          available: true,
         },
         {
           title: 'Demo',
           type: 'application/vnd.react',
-          content: source,
           version: 4,
+          available: true,
         },
       ],
     });
+  });
+
+  test('keeps revision metadata bounded while preserving persisted titles', () => {
+    const original = `${'x'.repeat(1024 * 1024)} blue`;
+    const second = `${'x'.repeat(1024 * 1024)} pink`;
+    const current = `${'x'.repeat(1024 * 1024)} orange`;
+    const colourStart = `${'x'.repeat(1024 * 1024)} `.length;
+    const messages = [
+      {
+        messageId: 'assistant-1',
+        text: artifact('dashboard', current)
+          .replace('title="Demo"', 'title="Latest title"')
+          .replace('title="Latest title"', 'title="Latest title" version="3"'),
+      },
+      {
+        messageId: 'assistant-2',
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                title: 'Original title',
+                version: 2,
+                base_sha256: sha256(original),
+                content_sha256: sha256(second),
+                inverse_patches: [{ start: colourStart, old: 'blue', new_length: 'pink'.length }],
+              }),
+            },
+          },
+        ],
+      },
+      {
+        messageId: 'assistant-3',
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                title: 'Renamed dashboard',
+                version: 3,
+                base_sha256: sha256(second),
+                content_sha256: sha256(current),
+                inverse_patches: [{ start: colourStart, old: 'pink', new_length: 'orange'.length }],
+              }),
+            },
+          },
+        ],
+      },
+    ];
+
+    const history = getArtifactRevisionHistory(messages, {
+      messageId: 'assistant-1',
+      identifier: 'dashboard',
+    });
+
+    expect(history.revisions).toEqual([
+      expect.objectContaining({ version: 1, title: 'Original title', available: true }),
+      expect.objectContaining({ version: 2, title: 'Original title', available: true }),
+      expect.objectContaining({ version: 3, title: 'Renamed dashboard', available: true }),
+    ]);
+    expect(history.revisions.every((revision) => !('content' in revision))).toBe(true);
+    expect(JSON.stringify(history).length).toBeLessThan(1024);
+    expect(
+      getArtifactRevisionSnapshot(messages, {
+        messageId: 'assistant-1',
+        identifier: 'dashboard',
+        version: 2,
+      }),
+    ).toEqual(expect.objectContaining({ title: 'Original title', content: second }));
+  });
+
+  test('keeps legitimate histories above 250 versions readable', () => {
+    const history = getArtifactRevisionHistory(
+      [
+        {
+          messageId: 'assistant-1',
+          text: artifact('dashboard', 'current').replace(
+            'title="Demo"',
+            'title="Demo" version="251"',
+          ),
+        },
+      ],
+      { messageId: 'assistant-1', identifier: 'dashboard' },
+    );
+
+    expect(history.currentVersion).toBe(251);
+    expect(history.revisions).toHaveLength(251);
+    expect(history.revisions[249]).toEqual({ version: 250, available: false });
+    expect(history.revisions[250]).toEqual(
+      expect.objectContaining({ version: 251, available: true }),
+    );
   });
 
   test('never substitutes the latest content when a historical patch is unavailable', () => {
