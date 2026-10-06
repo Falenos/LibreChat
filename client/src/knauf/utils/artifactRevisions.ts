@@ -40,29 +40,20 @@ export const isArtifactRevisionHistoryUnavailable = (error: unknown) => {
 };
 
 let nextOpenRequestId = 0;
-const activeOpenRequests = new Map<string, number>();
+let activeOpenRequestId: number | null = null;
 
-const artifactLineageKey = ({ messageId, identifier }: { messageId: string; identifier: string }) =>
-  `${messageId}\0${identifier}`;
-
-export const beginArtifactRevisionOpen = (lineage: { messageId: string; identifier: string }) => {
+export const beginArtifactRevisionOpen = () => {
   const requestId = ++nextOpenRequestId;
-  activeOpenRequests.set(artifactLineageKey(lineage), requestId);
+  activeOpenRequestId = requestId;
   return requestId;
 };
 
-export const isCurrentArtifactRevisionOpen = (
-  lineage: { messageId: string; identifier: string },
-  requestId: number,
-) => activeOpenRequests.get(artifactLineageKey(lineage)) === requestId;
+export const isCurrentArtifactRevisionOpen = (requestId: number) =>
+  activeOpenRequestId === requestId;
 
-export const finishArtifactRevisionOpen = (
-  lineage: { messageId: string; identifier: string },
-  requestId: number,
-) => {
-  const key = artifactLineageKey(lineage);
-  if (activeOpenRequests.get(key) === requestId) {
-    activeOpenRequests.delete(key);
+export const finishArtifactRevisionOpen = (requestId: number) => {
+  if (activeOpenRequestId === requestId) {
+    activeOpenRequestId = null;
   }
 };
 

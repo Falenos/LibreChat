@@ -267,7 +267,7 @@ export default function useArtifacts() {
         return;
       }
       const lineage = { messageId, identifier: revision.identifier };
-      const requestId = beginArtifactRevisionOpen(lineage);
+      const requestId = beginArtifactRevisionOpen();
       const localRequestId = ++versionSelectionRequestRef.current;
       setArtifactVersionError(false);
       setIsArtifactVersionLoading(true);
@@ -291,7 +291,7 @@ export default function useArtifacts() {
                   Math.max((currentArtifact.knaufRevision?.version ?? 1) - 1, 0),
                 history: artifactVersions,
               });
-        if (!isCurrentArtifactRevisionOpen(lineage, requestId)) {
+        if (!isCurrentArtifactRevisionOpen(requestId)) {
           return;
         }
         const register = (current: Record<string, Artifact | undefined> | null) =>
@@ -305,14 +305,14 @@ export default function useArtifacts() {
         setVisibleArtifacts(register);
         setCurrentArtifactId(selected.id);
       } catch {
-        if (isCurrentArtifactRevisionOpen(lineage, requestId)) {
+        if (isCurrentArtifactRevisionOpen(requestId)) {
           setArtifactVersionError(true);
         }
       } finally {
         if (localRequestId === versionSelectionRequestRef.current) {
           setIsArtifactVersionLoading(false);
         }
-        finishArtifactRevisionOpen(lineage, requestId);
+        finishArtifactRevisionOpen(requestId);
       }
     },
     [

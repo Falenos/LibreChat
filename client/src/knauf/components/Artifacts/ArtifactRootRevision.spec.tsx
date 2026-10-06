@@ -206,6 +206,61 @@ describe('Artifact root revision binding', () => {
     );
   });
 
+  it('anchors revision timestamps at the latest source time', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(10_000);
+    mockGetArtifactRevisionHistory.mockResolvedValue({
+      currentVersion: 100,
+      revisions: [
+        {
+          title: 'Versioning Probe',
+          type: 'application/vnd.react',
+          version: 1,
+          available: true,
+        },
+        {
+          title: 'Versioning Probe',
+          type: 'application/vnd.react',
+          version: 100,
+          available: true,
+        },
+      ],
+    });
+    const props = {
+      node: {},
+      id: 'ignored',
+      lastUpdateTime: 0,
+      identifier: 'versioning-probe',
+      title: 'Versioning Probe',
+      type: 'application/vnd.react',
+      version: '100',
+      children: <code>{'EDITED VERSION ONE HUNDRED'}</code>,
+    } as ComponentProps<typeof Artifact> & { version: string };
+    mockArtifactBody = 'EDITED VERSION ONE HUNDRED';
+
+    render(
+      <RecoilRoot>
+        <Artifact {...props} />
+        <Registry />
+      </RecoilRoot>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('root-artifact')).toHaveTextContent('ROOT VERSION ONE'),
+    );
+    const registry = JSON.parse(screen.getByTestId('artifact-registry').textContent ?? '{}');
+    const registered = Object.values(registry) as Array<{
+      lastUpdateTime: number;
+      knaufRevision?: { version: number };
+    }>;
+    expect(
+      registered.find(({ knaufRevision }) => knaufRevision?.version === 1)?.lastUpdateTime,
+    ).toBe(9901);
+    expect(
+      registered.find(({ knaufRevision }) => knaufRevision?.version === 100)?.lastUpdateTime,
+    ).toBe(10_000);
+    now.mockRestore();
+  });
+
   it('preserves loaded revision metadata across same-version source rerenders', async () => {
     mockGetArtifactRevisionHistory.mockResolvedValue({
       currentVersion: 2,
@@ -294,5 +349,49 @@ describe('Artifact root revision binding', () => {
       identifier: 'versioning-probe',
       version: 1,
     });
+  });
+
+  it('does not retry an exact Version 1 failure as a rolling-deployment fallback', async () => {
+    mockGetArtifactRevisionHistory.mockResolvedValue({
+      currentVersion: 2,
+      revisions: [
+        {
+          title: 'Versioning Probe',
+          type: 'application/vnd.react',
+          version: 1,
+          available: true,
+        },
+        {
+          title: 'Versioning Probe',
+          type: 'application/vnd.react',
+          version: 2,
+          available: true,
+        },
+      ],
+    });
+    mockGetArtifactRevision.mockRejectedValue({ response: { status: 404 } });
+    const props = {
+      node: {},
+      id: 'ignored',
+      lastUpdateTime: 0,
+      identifier: 'versioning-probe',
+      title: 'Versioning Probe',
+      type: 'application/vnd.react',
+      version: '2',
+      children: <code>{'EDITED VERSION TWO'}</code>,
+    } as ComponentProps<typeof Artifact> & { version: string };
+
+    render(
+      <RecoilRoot>
+        <Artifact {...props} />
+        <Registry />
+      </RecoilRoot>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('root-artifact')).toHaveTextContent('EDITED VERSION TWO'),
+    );
+    expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(1);
+    expect(mockGetArtifactRevision).toHaveBeenCalledTimes(1);
   });
 });

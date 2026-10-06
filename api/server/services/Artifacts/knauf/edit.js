@@ -12,7 +12,6 @@ const TOOL_NAME = 'edit_artifact';
 const MAX_REPLACEMENTS = 25;
 const MAX_REPLACEMENT_BYTES = 512 * 1024;
 const MAX_CONTEXT_ARTIFACTS = 10;
-const MAX_ARTIFACT_REVISIONS = 10_000;
 
 class ArtifactEditError extends Error {
   constructor(message, code, status = 400) {
@@ -39,11 +38,6 @@ const readAttribute = (boundary, name) => {
     boundary.text.indexOf('\n', boundary.start),
   );
   return openingLine.match(new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`))?.[2] ?? '';
-};
-
-const readVersion = (boundary) => {
-  const version = Number.parseInt(readAttribute(boundary, 'version'), 10);
-  return Number.isSafeInteger(version) && version > 0 ? version : 1;
 };
 
 const readArtifactContent = (boundary) => {
@@ -265,10 +259,12 @@ async function applyArtifactEdit(input, deps) {
   }
   // End [knauf]
 
-  const currentVersion = readVersion(target.boundary);
-  if (currentVersion >= MAX_ARTIFACT_REVISIONS) {
-    throw new ArtifactEditError('Artifact revision limit reached', 'revision_limit_reached', 409);
-  }
+  const { currentVersion } = resolveArtifactRevisionState(
+    messages,
+    target,
+    target.message.messageId,
+    identifier,
+  );
   const version = currentVersion + 1;
   workingMessage = withVersion(
     workingMessage,
@@ -360,7 +356,30 @@ const readStoredRevisions = (messages, messageId, identifier) => {
   return revisions;
 };
 
-const readRevisionTitle = (revisions, version, fallback) => {
+const resolveArtifactRevisionState = (messages, target, messageId, identifier) => {
+  const revisions = readStoredRevisions(messages, messageId, identifier);
+  if (revisions.size === 0) {
+    return { currentVersion: 1, revisions };
+  }
+
+  let currentVersion = 1;
+  for (const version of revisions.keys()) {
+    currentVersion = Math.max(currentVersion, version);
+  }
+  const currentRevision = revisions.get(currentVersion);
+  if (
+    !currentRevision ||
+    currentRevision.content_sha256 !== sha256(readArtifactContent(target.boundary))
+  ) {
+    throw new ArtifactEditError('Artifact revision history is invalid', 'invalid_revision', 409);
+  }
+  return { currentVersion, revisions };
+};
+
+const readRevisionTitle = (revisions, version, currentVersion, fallback) => {
+  if (version === currentVersion) {
+    return fallback;
+  }
   const storedTitle =
     revisions.get(version)?.title ?? (version === 1 ? revisions.get(2)?.title : undefined);
   return typeof storedTitle === 'string' && storedTitle.length > 0 ? storedTitle : fallback;
@@ -376,20 +395,17 @@ function getArtifactRevisionSnapshot(messages, { messageId, identifier, version 
     throw new ArtifactEditError('Artifact not found', 'artifact_not_found', 404);
   }
 
-  const currentVersion = readVersion(target.boundary);
-  if (currentVersion > MAX_ARTIFACT_REVISIONS) {
-    throw new ArtifactEditError(
-      'Artifact version history is too large',
-      'revision_history_too_large',
-      413,
-    );
-  }
+  const { currentVersion, revisions } = resolveArtifactRevisionState(
+    messages,
+    target,
+    messageId,
+    identifier,
+  );
   if (version > currentVersion) {
     throw new ArtifactEditError('Artifact version not found', 'revision_not_found', 404);
   }
 
   let content = readArtifactContent(target.boundary);
-  const revisions = readStoredRevisions(messages, messageId, identifier);
   for (let candidateVersion = currentVersion; candidateVersion > version; candidateVersion -= 1) {
     const revision = revisions.get(candidateVersion);
     if (!revision || sha256(content) !== revision.content_sha256) {
@@ -416,6 +432,7 @@ function getArtifactRevisionSnapshot(messages, { messageId, identifier, version 
     title: readRevisionTitle(
       revisions,
       version,
+      currentVersion,
       readAttribute(target.boundary, 'title') || identifier,
     ),
     type: readAttribute(target.boundary, 'type'),
@@ -437,24 +454,30 @@ function getArtifactRevisionHistory(messages, { messageId, identifier }) {
   const latestTitle = readAttribute(target.boundary, 'title') || identifier;
   const type = readAttribute(target.boundary, 'type');
   const language = readAttribute(target.boundary, 'language');
-  const currentVersion = readVersion(target.boundary);
-  if (currentVersion > MAX_ARTIFACT_REVISIONS) {
-    throw new ArtifactEditError(
-      'Artifact version history is too large',
-      'revision_history_too_large',
-      413,
-    );
-  }
-  const revisions = readStoredRevisions(messages, messageId, identifier);
+  const { currentVersion, revisions } = resolveArtifactRevisionState(
+    messages,
+    target,
+    messageId,
+    identifier,
+  );
   const snapshots = [];
-  let content = readArtifactContent(target.boundary);
-  let historyAvailable = true;
+  const availableVersions = new Set([currentVersion]);
+  let expectedContentSha256 = sha256(readArtifactContent(target.boundary));
 
-  for (let version = currentVersion; version >= 1; version -= 1) {
-    snapshots.unshift(
-      historyAvailable
+  for (let version = currentVersion; version > 1; version -= 1) {
+    const revision = revisions.get(version);
+    if (!revision || revision.content_sha256 !== expectedContentSha256) {
+      break;
+    }
+    availableVersions.add(version - 1);
+    expectedContentSha256 = revision.base_sha256;
+  }
+
+  for (let version = 1; version <= currentVersion; version += 1) {
+    snapshots.push(
+      availableVersions.has(version)
         ? {
-            title: readRevisionTitle(revisions, version, latestTitle),
+            title: readRevisionTitle(revisions, version, currentVersion, latestTitle),
             type,
             version,
             available: true,
@@ -462,27 +485,6 @@ function getArtifactRevisionHistory(messages, { messageId, identifier }) {
           }
         : { version, available: false },
     );
-    if (version === 1 || !historyAvailable) {
-      continue;
-    }
-
-    const revision = revisions.get(version);
-    if (!revision || sha256(content) !== revision.content_sha256) {
-      historyAvailable = false;
-      continue;
-    }
-    for (let patchIndex = revision.inverse_patches.length - 1; patchIndex >= 0; patchIndex -= 1) {
-      const patch = revision.inverse_patches[patchIndex];
-      if (patch.start + patch.new_length > content.length) {
-        historyAvailable = false;
-        break;
-      }
-      content =
-        content.slice(0, patch.start) + patch.old + content.slice(patch.start + patch.new_length);
-    }
-    if (historyAvailable && sha256(content) !== revision.base_sha256) {
-      historyAvailable = false;
-    }
   }
 
   return { currentVersion, revisions: snapshots };

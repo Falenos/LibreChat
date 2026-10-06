@@ -63,12 +63,54 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
 
   const handleOpen = async () => {
     const lineage = { messageId: result.messageId, identifier: result.identifier };
-    const requestId = beginArtifactRevisionOpen(lineage);
+    const requestId = beginArtifactRevisionOpen();
     setFailed(false);
     setIsLoading(true);
     try {
-      const history = await getArtifactRevisionHistory(result);
-      if (!isCurrentArtifactRevisionOpen(lineage, requestId)) {
+      let history;
+      try {
+        history = await getArtifactRevisionHistory(result);
+      } catch (error) {
+        if (!isCurrentArtifactRevisionOpen(requestId)) {
+          return;
+        }
+        if (!isArtifactRevisionHistoryUnavailable(error)) {
+          throw error;
+        }
+        const snapshot = await getArtifactRevision(result);
+        if (!isCurrentArtifactRevisionOpen(requestId)) {
+          return;
+        }
+        const fallbackHistory = [
+          {
+            id: revisionId,
+            version: result.version,
+            available: true,
+            title: snapshot.title,
+            type: snapshot.type,
+            language: snapshot.language,
+          },
+        ];
+        const selected = projectArtifactRevisionSnapshot({
+          snapshot,
+          base: lineage,
+          rootTime: Date.now() - result.version + 1,
+          history: fallbackHistory,
+        });
+        const register = (current: Record<string, Artifact | undefined> | null) =>
+          mergeArtifactRevisionRegistry({
+            current,
+            additions: [selected],
+            ...lineage,
+            history: fallbackHistory,
+          });
+        setArtifacts(register);
+        setVisibleArtifacts(register);
+        setCurrentArtifactId(selected.id);
+        setArtifactsVisible(true);
+        return;
+      }
+      if (!isCurrentArtifactRevisionOpen(requestId)) {
         return;
       }
       const revisionHistory = projectArtifactRevisionHistory({
@@ -95,10 +137,10 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
           : projectArtifactRevisionSnapshot({
               snapshot: await getArtifactRevision(result),
               base: lineage,
-              rootTime: Date.now() - history.currentVersion,
+              rootTime: Date.now() - history.currentVersion + 1,
               history: revisionHistory,
             });
-      if (!isCurrentArtifactRevisionOpen(lineage, requestId)) {
+      if (!isCurrentArtifactRevisionOpen(requestId)) {
         return;
       }
       const register = (current: Record<string, Artifact | undefined> | null) =>
@@ -112,54 +154,13 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
       setVisibleArtifacts(register);
       setCurrentArtifactId(selected.id);
       setArtifactsVisible(true);
-    } catch (error) {
-      if (!isCurrentArtifactRevisionOpen(lineage, requestId)) {
-        return;
-      }
-      if (!isArtifactRevisionHistoryUnavailable(error)) {
+    } catch {
+      if (isCurrentArtifactRevisionOpen(requestId)) {
         setFailed(true);
-        return;
-      }
-      try {
-        const snapshot = await getArtifactRevision(result);
-        if (!isCurrentArtifactRevisionOpen(lineage, requestId)) {
-          return;
-        }
-        const fallbackHistory = [
-          {
-            id: revisionId,
-            version: result.version,
-            available: true,
-            title: snapshot.title,
-            type: snapshot.type,
-            language: snapshot.language,
-          },
-        ];
-        const selected = projectArtifactRevisionSnapshot({
-          snapshot,
-          base: lineage,
-          rootTime: Date.now() - result.version,
-          history: fallbackHistory,
-        });
-        const register = (current: Record<string, Artifact | undefined> | null) =>
-          mergeArtifactRevisionRegistry({
-            current,
-            additions: [selected],
-            ...lineage,
-            history: fallbackHistory,
-          });
-        setArtifacts(register);
-        setVisibleArtifacts(register);
-        setCurrentArtifactId(selected.id);
-        setArtifactsVisible(true);
-      } catch {
-        if (isCurrentArtifactRevisionOpen(lineage, requestId)) {
-          setFailed(true);
-        }
       }
     } finally {
       setIsLoading(false);
-      finishArtifactRevisionOpen(lineage, requestId);
+      finishArtifactRevisionOpen(requestId);
     }
   };
 

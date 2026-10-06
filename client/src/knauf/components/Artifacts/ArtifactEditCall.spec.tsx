@@ -329,6 +329,86 @@ describe('ArtifactEditCall', () => {
     expect(screen.getByTestId('selection')).toHaveTextContent('version:3:true:pink snapshot');
   });
 
+  it('keeps the last clicked artifact when requests from different lineages finish out of order', async () => {
+    const dashboard = deferred<{
+      title: string;
+      type: string;
+      content: string;
+      version: number;
+    }>();
+    const report = deferred<{
+      title: string;
+      type: string;
+      content: string;
+      version: number;
+    }>();
+    mockGetArtifactRevisionHistory.mockImplementation(({ identifier }: { identifier: string }) =>
+      Promise.resolve({
+        currentVersion: 2,
+        revisions: [
+          {
+            title: identifier === 'dashboard' ? 'Sales dashboard' : 'Quarterly report',
+            type: 'application/vnd.react',
+            version: 1,
+            available: true,
+          },
+          {
+            title: identifier === 'dashboard' ? 'Sales dashboard' : 'Quarterly report',
+            type: 'application/vnd.react',
+            version: 2,
+            available: true,
+          },
+        ],
+      }),
+    );
+    mockGetArtifactRevision.mockImplementation(({ identifier }: { identifier: string }) =>
+      identifier === 'dashboard' ? dashboard.promise : report.promise,
+    );
+    const reportOutput = JSON.stringify({
+      ...JSON.parse(output),
+      identifier: 'report',
+      messageId: 'message-2',
+      title: 'Quarterly report',
+    });
+
+    render(
+      <RecoilRoot initializeState={({ set }) => set(store.artifactsVisibility, false)}>
+        <ArtifactEditCall result={parseArtifactEditResult(output)!} />
+        <ArtifactEditCall result={parseArtifactEditResult(reportOutput)!} />
+        <Selection />
+      </RecoilRoot>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_updated_file:Sales dashboard' }));
+    await waitFor(() => expect(mockGetArtifactRevision).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_updated_file:Quarterly report' }));
+    await waitFor(() => expect(mockGetArtifactRevision).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      report.resolve({
+        title: 'Quarterly report',
+        type: 'application/vnd.react',
+        content: 'report snapshot',
+        version: 2,
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('selection')).toHaveTextContent('report snapshot'),
+    );
+
+    await act(async () => {
+      dashboard.resolve({
+        title: 'Sales dashboard',
+        type: 'application/vnd.react',
+        content: 'dashboard snapshot',
+        version: 2,
+      });
+    });
+    expect(screen.getByTestId('selection')).toHaveTextContent(
+      'artifact-revision:message-2:report:version:2:true:report snapshot',
+    );
+  });
+
   it('reports an unavailable historical version instead of substituting another snapshot', async () => {
     mockGetArtifactRevisionHistory.mockResolvedValue({
       currentVersion: 3,
@@ -378,6 +458,23 @@ describe('ArtifactEditCall', () => {
     await waitFor(() =>
       expect(screen.getByTestId('selection')).toHaveTextContent('legacy exact snapshot'),
     );
+  });
+
+  it('does not treat an exact snapshot 404 as a missing history route', async () => {
+    mockGetArtifactRevision.mockRejectedValue({ response: { status: 404 } });
+
+    render(
+      <RecoilRoot initializeState={({ set }) => set(store.artifactsVisibility, false)}>
+        <ArtifactEditCall result={parseArtifactEditResult(output)!} />
+        <Selection />
+      </RecoilRoot>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_updated_file:Sales dashboard' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('com_ui_error'));
+    expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(1);
+    expect(mockGetArtifactRevision).toHaveBeenCalledTimes(1);
     expect(mockGetArtifactRevision).toHaveBeenCalledWith(
       expect.objectContaining({ identifier: 'dashboard', version: 2 }),
     );

@@ -159,32 +159,33 @@ describe('edit_artifact', () => {
     expect(compareAndSwap.mock.calls[0][0].updated).not.toContain('version="5"');
   });
 
-  test('rejects an edit before creating a revision the history API cannot serve', async () => {
-    const source = 'export default function Report() { return <p>limit</p>; }';
+  test('assigns versions from persisted edit history rather than model-authored metadata', async () => {
+    const source = 'export default function Report() { return <p>current</p>; }';
     const message = {
       messageId: 'assistant-report',
       conversationId: 'conversation-1',
       user: 'user-1',
       text: artifact('report', source).replace('title="Demo"', 'title="Demo" version="10000"'),
     };
-    const compareAndSwap = jest.fn();
+    const compareAndSwap = jest.fn().mockResolvedValue(true);
 
-    await expect(
-      applyArtifactEdit(
-        {
-          userId: 'user-1',
-          conversationId: 'conversation-1',
-          identifier: 'report',
-          expectedSha256: sha256(source),
-          replacements: [{ old: 'limit', new: 'overflow' }],
-        },
-        {
-          getMessages: jest.fn().mockResolvedValue([message]),
-          compareAndSwap,
-        },
-      ),
-    ).rejects.toMatchObject({ code: 'revision_limit_reached', status: 409 });
-    expect(compareAndSwap).not.toHaveBeenCalled();
+    const result = await applyArtifactEdit(
+      {
+        userId: 'user-1',
+        conversationId: 'conversation-1',
+        identifier: 'report',
+        expectedSha256: sha256(source),
+        replacements: [{ old: 'current', new: 'next' }],
+      },
+      {
+        getMessages: jest.fn().mockResolvedValue([message]),
+        compareAndSwap,
+      },
+    );
+
+    expect(result.version).toBe(2);
+    expect(compareAndSwap.mock.calls[0][0].updated).toContain('version="2"');
+    expect(compareAndSwap.mock.calls[0][0].updated).not.toContain('version="10001"');
   });
 
   test('ART-EDIT-009 preserves imports, styles, and icons outside a minimal model edit', async () => {
@@ -407,7 +408,7 @@ export default function Dashboard() {
     expect(history.revisions).toEqual([
       expect.objectContaining({ version: 1, title: 'Original title', available: true }),
       expect.objectContaining({ version: 2, title: 'Original title', available: true }),
-      expect.objectContaining({ version: 3, title: 'Renamed dashboard', available: true }),
+      expect.objectContaining({ version: 3, title: 'Latest title', available: true }),
     ]);
     expect(history.revisions.every((revision) => !('content' in revision))).toBe(true);
     expect(JSON.stringify(history).length).toBeLessThan(1024);
@@ -421,25 +422,105 @@ export default function Dashboard() {
   });
 
   test('keeps legitimate histories above 250 versions readable', () => {
+    const revisions = Array.from({ length: 250 }, (_, index) => {
+      const version = index + 2;
+      return {
+        messageId: `assistant-${version}`,
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                title: 'Demo',
+                version,
+                base_sha256: sha256(`version ${version - 1}`),
+                content_sha256: sha256(`version ${version}`),
+                inverse_patches: [
+                  { start: 8, old: String(version - 1), new_length: String(version).length },
+                ],
+              }),
+            },
+          },
+        ],
+      };
+    });
     const history = getArtifactRevisionHistory(
       [
         {
           messageId: 'assistant-1',
-          text: artifact('dashboard', 'current').replace(
+          text: artifact('dashboard', 'version 251').replace(
             'title="Demo"',
             'title="Demo" version="251"',
           ),
         },
+        ...revisions,
       ],
       { messageId: 'assistant-1', identifier: 'dashboard' },
     );
 
     expect(history.currentVersion).toBe(251);
     expect(history.revisions).toHaveLength(251);
-    expect(history.revisions[249]).toEqual({ version: 250, available: false });
+    expect(history.revisions[0]).toEqual(expect.objectContaining({ version: 1, available: true }));
     expect(history.revisions[250]).toEqual(
       expect.objectContaining({ version: 251, available: true }),
     );
+  });
+
+  test('projects metadata without applying inverse patches for every revision', () => {
+    const messages = [
+      {
+        messageId: 'assistant-1',
+        text: artifact('dashboard', 'version 2').replace(
+          'title="Demo"',
+          'title="Demo" version="2"',
+        ),
+      },
+      {
+        messageId: 'assistant-2',
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                title: 'Demo',
+                version: 2,
+                base_sha256: sha256('version 1'),
+                content_sha256: sha256('version 2'),
+                inverse_patches: [{ start: 9999, old: '1', new_length: 1 }],
+              }),
+            },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      getArtifactRevisionHistory(messages, {
+        messageId: 'assistant-1',
+        identifier: 'dashboard',
+      }),
+    ).toEqual({
+      currentVersion: 2,
+      revisions: [
+        expect.objectContaining({ version: 1, available: true }),
+        expect.objectContaining({ version: 2, available: true }),
+      ],
+    });
+    expect(() =>
+      getArtifactRevisionSnapshot(messages, {
+        messageId: 'assistant-1',
+        identifier: 'dashboard',
+        version: 1,
+      }),
+    ).toThrow(expect.objectContaining({ code: 'invalid_revision', status: 409 }));
   });
 
   test('never substitutes the latest content when a historical patch is unavailable', () => {

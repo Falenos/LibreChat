@@ -146,53 +146,11 @@ export function Artifact({
         }
         loadedHistoryRef.current = historyKey;
         const requestId = ++historyRequestRef.current;
-        void getArtifactRevisionHistory({ messageId, identifier })
-          .then(async (history) => {
-            if (requestId !== historyRequestRef.current) {
-              return;
-            }
-            const previousRoot = rootRevisionTimeRef.current;
-            const rootRevisionTime =
-              previousRoot?.lineageKey === lineageKey ? previousRoot.time : now - 1;
-            rootRevisionTimeRef.current = { lineageKey, time: rootRevisionTime };
-            const revisionHistory = projectArtifactRevisionHistory({
-              history,
-              messageId,
-              identifier,
-            });
-            const latestWithHistory = { ...latest, knaufRevisionHistory: revisionHistory };
-            const rootRevision = revisionHistory.find(
-              (revision) => revision.available && revision.version === 1,
-            );
-            const original = rootRevision
-              ? projectArtifactRevisionSnapshot({
-                  snapshot: await getArtifactRevision({
-                    messageId,
-                    identifier,
-                    version: 1,
-                  }),
-                  base: currentArtifact,
-                  rootTime: rootRevisionTime,
-                  history: revisionHistory,
-                })
-              : null;
-            if (requestId !== historyRequestRef.current) {
-              return;
-            }
-            const registerHistory = (artifacts: Record<string, Artifact | undefined> | null) => ({
-              ...mergeArtifactRevisionRegistry({
-                current: artifacts,
-                additions: original ? [latestWithHistory, original] : [latestWithHistory],
-                messageId,
-                identifier,
-                history: revisionHistory,
-              }),
-            });
-            setArtifacts(registerHistory);
-            setVisibleArtifacts(registerHistory);
-            setArtifact(original ?? latestWithHistory);
-          })
-          .catch(async (error) => {
+        void (async () => {
+          let history;
+          try {
+            history = await getArtifactRevisionHistory({ messageId, identifier });
+          } catch (error) {
             if (requestId !== historyRequestRef.current) {
               return;
             }
@@ -230,7 +188,7 @@ export function Artifact({
               const original = projectArtifactRevisionSnapshot({
                 snapshot,
                 base: currentArtifact,
-                rootTime: now - 1,
+                rootTime: now - version + 1,
                 history: fallbackHistory,
               });
               const latestWithHistory = {
@@ -253,7 +211,56 @@ export function Artifact({
                 setArtifact(latest);
               }
             }
-          });
+            return;
+          }
+
+          try {
+            const previousRoot = rootRevisionTimeRef.current;
+            const rootRevisionTime =
+              previousRoot?.lineageKey === lineageKey ? previousRoot.time : now - version + 1;
+            rootRevisionTimeRef.current = { lineageKey, time: rootRevisionTime };
+            const revisionHistory = projectArtifactRevisionHistory({
+              history,
+              messageId,
+              identifier,
+            });
+            const latestWithHistory = { ...latest, knaufRevisionHistory: revisionHistory };
+            const rootRevision = revisionHistory.find(
+              (revision) => revision.available && revision.version === 1,
+            );
+            const original = rootRevision
+              ? projectArtifactRevisionSnapshot({
+                  snapshot: await getArtifactRevision({
+                    messageId,
+                    identifier,
+                    version: 1,
+                  }),
+                  base: currentArtifact,
+                  rootTime: rootRevisionTime,
+                  history: revisionHistory,
+                })
+              : null;
+            if (requestId !== historyRequestRef.current) {
+              return;
+            }
+            const registerHistory = (artifacts: Record<string, Artifact | undefined> | null) => ({
+              ...mergeArtifactRevisionRegistry({
+                current: artifacts,
+                additions: original ? [latestWithHistory, original] : [latestWithHistory],
+                messageId,
+                identifier,
+                history: revisionHistory,
+              }),
+            });
+            setArtifacts(registerHistory);
+            setVisibleArtifacts(registerHistory);
+            setArtifact(original ?? latestWithHistory);
+          } catch {
+            if (requestId === historyRequestRef.current) {
+              setArtifact(latest);
+            }
+          }
+        })();
         return;
       }
       // End [knauf]
