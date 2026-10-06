@@ -41,6 +41,7 @@ If you can't decide between promote and archive: archive.
 | [`pdf-password-permission-handling.md`](./pdf-password-permission-handling.md) | Agentic Karl maintainers | 2026-07-20 | KK20-232 — admit all PDFs readable without credentials and distinguish invalid files from open-password files; keep password submission as an optional follow-up |
 | [`idml-translation-spike.md`](./idml-translation-spike.md) | Agentic Karl maintainers + Marketing localisation reviewers | 2026-08-24 | KK20-297 — compare Model Router and Azure Translator on supplied IDML fixtures, then complete human InDesign acceptance |
 | [`file-translation-production-plan.md`](./file-translation-production-plan.md) | Agentic Karl maintainers + Marketing localisation reviewers | 2026-08-26 | KK20-274 / KK20-297 — durable worker execution, admission control, parser hardening, observability, and production acceptance |
+| [`office-document-skills.md`](./office-document-skills.md) | jorgecostak | 2026-09-28 | KK20-397 / KK20-398 — Word, PowerPoint, PDF and Excel files from the code sandbox: adapter 0.4.0, LibreChat seams, the four format skills and the Knauf fonts |
 
 The PII & privacy workstream lives in [`../privacy/`](../privacy/) rather than here — it grew a
 strategy doc and a compliance mapping alongside the rollout, so it graduated into a topic folder

@@ -28,10 +28,11 @@ Applies to `text/markdown` artifacts and to `.docx` / `.odt` deliverables.
   `#0F1A2A` text (11.96:1) wherever the format supports fills.
 - Close with a footer line: document owner, date, and confidentiality if relevant.
 
-Use Knauf Screen for body copy and Knauf Screen Head for headings whenever the
-document format can embed the supplied font. Office previews render through a
-sanitised static HTML pipeline (`packages/api/src/files/documents/html.ts`), so a
-preview may fall back to Arial even when the source document embeds Knauf Screen.
+Use Knauf Screen for body copy and Knauf Screen Head for headings. A `.docx` built in
+the code sandbox names them without carrying them, and a PDF embeds them; the details,
+and the Word style mapping, are in `skills/karl-brand/references/office.md`. The chat's
+preview card for an Office file is a simplified rendering, so it may show Arial even
+when the document itself is right.
 
 ## Decks outside the slide artifact
 
@@ -41,8 +42,9 @@ Same grammar as the slide template: title → section divider → bullets → ch
   `#66BCE8` for the subtitle (5.46:1 on that field).
 - Content slides: white or `surface.page` `#F4F8FB`, headings in `ink.heading`.
 - One idea per slide. If a slide needs a second idea, it needs to be two slides.
-- Knauf Screen Head for slide titles; Knauf Screen for body copy. Embed the supplied
-  font files in the deck rather than substituting another display face.
+- Knauf Screen Head for slide titles; Knauf Screen for body copy. A `.pptx` built in
+  the code sandbox names these fonts but cannot embed them, so deliver its PDF as well
+  when the look must be exact (`skills/karl-brand/references/office.md`).
 - The wordmark appears once on the title slide and small in the footer — see
   `skills/karl-brand/references/logo.md`.
 
@@ -57,8 +59,8 @@ Same grammar as the slide template: title → section divider → bullets → ch
 
 ## Spreadsheets
 
-- Knauf Screen for cells and Knauf Screen Head for titles wherever the workbook
-  format supports embedded fonts; otherwise use Arial as the explicit fallback.
+- Arial for cells and titles: a workbook cannot embed fonts, and Arial is the brand's
+  fallback for formats that cannot.
 - Header row: `#CFD7D9` fill, `#0F1A2A` text, bold.
 - Primary series `#0099DE`; further series follow `KNAUF.categorical` in order.
 - Conditional formatting uses `KNAUF.status`, always with an icon or a text column

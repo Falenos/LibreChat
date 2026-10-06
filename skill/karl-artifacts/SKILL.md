@@ -6,7 +6,7 @@ description: >-
   questions about, and modifying an attached SVG.
 argument-hint: "[what to build or change]"
 user-invocable: true
-version: "3.2.0"
+version: "3.3.0"
 ---
 
 # KARL Artifacts: choosing well and building previews that render
@@ -28,6 +28,7 @@ like Knauf.
 | Architecture, flow, sequence, ER, or Gantt diagrams | `application/vnd.mermaid` | Renders with zoom/pan; far cheaper to iterate than hand-drawing boxes |
 | A logo, icon, or self-contained vector illustration — static or declaratively animated | `image/svg+xml` | Rendered directly; set a `viewBox`, omit fixed width/height, and load the SVG reference |
 | Plain unstyled prose the user will paste elsewhere: a policy, a plan, a spec, meeting notes | `text/markdown` | Rendered document the user can copy/export. No layout, no brand styling, no slides — if the deliverable needs any of those, it is a react artifact |
+| **A file whose format the user named** — Word/.docx, PowerPoint/.pptx, PDF, Excel/.xlsx — or a change to such an attached file | not an artifact | Built by code in the sandbox: load `karl-docx`, `karl-pptx`, `karl-pdf` or `karl-xlsx`. A PDF of an artifact already in the chat comes from its Download menu instead |
 
 Before emitting `application/vnd.mermaid`, load and follow:
 
@@ -49,7 +50,8 @@ uploaded original was overwritten.
 
 Rules of thumb:
 
-- **A presentation is always react.** "Deck", "slides", "presentation", "pitch" and
+- **A presentation is always react** unless the user names a PowerPoint file
+  (`.pptx`), which is `karl-pptx`. "Deck", "slides", "presentation", "pitch" and
   "walkthrough" all mean the `slides` reference and its prebuilt
   `/knauf/slides` renderer — never markdown and never a hand-written deck shell.
   The artifact supplies slide data; the renderer owns navigation, branding,
@@ -212,10 +214,10 @@ storage. This works whether or not code execution is enabled.
 
 - One-off answers, explanations, and short snippets → chat markdown.
 - Content you were asked to review or critique → comment in chat.
-- Data analysis: summarize the findings in chat, then embed the computed numbers
-  in a react artifact as `const DATA = [...]`. There is no code-execution sandbox
-  and no file output on KARL, so never offer to compute elsewhere or to deliver a
-  file.
+- Data analysis: compute in the code sandbox (`karl-data-analysis`, `karl-xlsx`),
+  summarize the findings in chat, and when a chart or dashboard helps, embed the
+  computed numbers in a react artifact as `const DATA = [...]`. Offer a Word,
+  PowerPoint or PDF file only when the user names that format.
 
 When the request is genuinely borderline, answer in chat and offer an artifact as a
 follow-up. When it is not borderline — a deck, a report, a dashboard, a diagram —

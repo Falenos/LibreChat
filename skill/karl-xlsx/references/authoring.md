@@ -32,29 +32,37 @@ Depth for the `karl-xlsx` skill. Examples run in the sandbox via a quoted
   drive the outputs. openpyxl writes the formula *string* with no cached result,
   so you must recalculate before delivery or some viewers show blanks.
 
-## The recalc workflow (verified on this sandbox)
+## Recalculate and check before delivery
 
-LibreOffice headless recomputes and caches formula results. Write with openpyxl,
-then convert-through-LibreOffice to force a recalc:
+Every workbook that contains formulas goes through the helper, in the same call
+that wrote it:
 
-      python3 << 'PY'
-      import subprocess, glob, os
-      from openpyxl import load_workbook
-      # ... after writing /mnt/data/model.xlsx with formulas via openpyxl ...
-      os.makedirs('/mnt/data/rc', exist_ok=True)
-      r = subprocess.run(
-          ['soffice','--headless','--calc','--convert-to','xlsx',
-           '--outdir','/mnt/data/rc','/mnt/data/model.xlsx'],
-          capture_output=True, text=True, timeout=120)
-      out = glob.glob('/mnt/data/rc/*.xlsx')[0]
-      # sanity-check a known cell now has a cached value
-      print('recalc rc', r.returncode, '->', out)
-      print('sample:', load_workbook(out, data_only=True).active['C2'].value)
-      PY
+      python3 -B /mnt/data/karl-xlsx/scripts/karl_xlsx.py recalc /mnt/data/model.xlsx
 
-Deliver the recalculated file from `/mnt/data/rc/`. A clean recalc proves the
-formulas **evaluate**, not that they are **right** — verify one or two sample
-cells against a hand calculation before trusting the whole sheet.
+It works on a copy in `/tmp`: LibreOffice computes every formula (with
+"always recalculate" forced, since LibreOffice otherwise trusts the zeros
+xlsxwriter caches), and the results are written back into **the original file**
+as its cached values. Formatting, charts and defined names are untouched, and
+there is only ever one workbook. `--out OTHER.xlsx` writes a copy instead. Dates
+follow the workbook's own date system (1900 or 1904).
+
+The file is replaced only when the check is clean. It prints JSON and exits 1
+when anything needs fixing, and then **leaves the workbook exactly as it was**
+(`"written": false`): fix the formulas and run `recalc` again.
+
+- `errors` — cells showing `#REF!`, `#DIV/0!`, `#NAME?`, `#VALUE!`, `#N/A`…, by
+  type, with sheet and cell. **Deliver only with zero errors**: fix the formula
+  (guard divisions with `IF(B2=0,"",A2/B2)`, check ranges and sheet names) and
+  re-run.
+- `unsupported` — dynamic-array functions the sandbox cannot compute (below).
+- `prefixed` — cells where an Excel 2010+ function was missing its `_xlfn.`
+  prefix; the helper added it, since Excel otherwise shows `#NAME?`.
+- `empty_results` — formulas that computed to nothing; usually fine (an
+  `IF` returning `""`), worth a look when unexpected.
+
+A clean run proves the formulas **evaluate**, not that they are **right**:
+check one or two results by hand (a total, a growth rate) before trusting the
+sheet, and say in the reply which cells are inputs.
 
 ## Formula compatibility (LibreOffice recalc can't do everything)
 
@@ -66,36 +74,56 @@ but not the newest dynamic-array ones:
 - **Won't evaluate** (avoid, or precompute in pandas): `XLOOKUP`, `XMATCH`,
   `FILTER`, `SORT`, `UNIQUE`, `SEQUENCE`, `LAMBDA` and other dynamic-array
   functions.
-- Some post-2007 functions need an `_xlfn.` prefix when written via openpyxl so
-  Excel recognizes them: e.g. `_xlfn.TEXTJOIN`, `_xlfn.IFS`, `_xlfn.SWITCH`,
-  `_xlfn.MAXIFS`, `_xlfn.MINIFS`.
+- Excel 2010+ functions (`TEXTJOIN`, `IFS`, `SWITCH`, `MAXIFS`, `MINIFS`,
+  `CONCAT`, `IFNA`, `STDEV.S`, …) are stored with an `_xlfn.` prefix. Write them
+  plainly; `recalc` adds the prefix. xlsxwriter adds it itself when the workbook
+  is created with `{'use_future_functions': True}`.
 - Quote sheet names that contain spaces in references: `='Assumptions Inputs'!$B$5`.
 
 ## Formatting that reads as professional
 
-- Set a readable default font (e.g. Calibri/Arial), bold the header row, freeze
-  the header (`worksheet.freeze_panes(1,0)` in xlsxwriter), and set sensible
-  column widths.
+Knauf styles come from the helper once `karl-brand` has been invoked (it needs
+the brand tokens). Spreadsheets cannot embed fonts, so the brand uses Arial
+here, with the Knauf colours:
+
+      import sys; sys.path.insert(0, '/mnt/data/karl-xlsx/scripts')
+      import karl_xlsx, xlsxwriter
+      wb = xlsxwriter.Workbook('/mnt/data/plan.xlsx')
+      f = karl_xlsx.brand_formats(wb)   # header, text, int, decimal, percent, date, input, total, title
+      ws = wb.add_worksheet('Plan')
+      ws.write_row(0, 0, ['Region', 'Units', 'Price (EUR)'], f['header'])
+      ws.write(1, 1, 1240, f['input'])  # an editable input cell
+
+With openpyxl (editing a workbook), `karl_xlsx.style_header(ws, row=1)` styles
+the header row, freezes it and adds a filter.
+
+- Bold the header row, freeze it (`worksheet.freeze_panes(1, 0)` in
+  xlsxwriter), and set column widths so no value shows as `###`.
 - Use **number formats**, not pre-rounded strings, so the underlying value stays
   numeric: currency `#,##0` (unit in the header), percentages `0.0%` stored as
   fractions, thousands `#,##0`, dates `yyyy-mm-dd`.
-- For financial models, the common convention is blue text for hardcoded inputs,
-  black for formulas, and a light fill on the cells a user is meant to edit —
-  apply it consistently if the user works that way.
+- For financial models, inputs look different from formulas: the `input` format
+  (heading-blue text on a light fill) marks every hardcoded assumption, and
+  formulas stay in the default ink. Apply it consistently.
 - One concept per sheet; name sheets and headers exactly as the user asked.
 
 ## Charts
 
 - Native Excel charts: `xlsxwriter`'s `workbook.add_chart(...)` +
   `worksheet.insert_chart(...)` — the chart stays editable in Excel and is tied
-  to the sheet's data.
+  to the sheet's data. Brand them with `**karl_xlsx.series_style(i)` in each
+  `add_series` call (Knauf categorical order) and `karl_xlsx.brand_chart(chart)`
+  (fonts, gridlines, legend at the bottom, no chart title — put it in a cell).
 - A static image chart (matplotlib `savefig` a `.png`) is better when the user
   wants a picture to drop into a report, or for the inline preview in chat.
 
 ## Editing an existing workbook
 
+- Run `karl_xlsx.py inspect FILE` first. **openpyxl drops charts** when it saves
+  a workbook it loaded (and loses some other features); `inspect` warns when the
+  file has any. Then rebuild the charts after editing, or tell the user.
 - Load with openpyxl, change only what's asked, save. Match the file's existing
-  headers, number formats, and input-vs-formula split.
+  headers, number formats, and input-vs-formula split. Then `recalc`.
 - Write only the **top-left** cell of a merged range; the others must stay
   empty.
 - `.xlsm` (macros): `load_workbook(path, keep_vba=True)` or the macros are
@@ -107,5 +135,5 @@ but not the newest dynamic-array ones:
 
 When asked for a reusable template: include a short legend naming the editable
 cells, one realistic example row, and formulas already wired to the input cells
-(then recalc so the example shows results). Keep instructions in the sheet, not
-only in chat.
+(then `recalc` so the example shows results). Keep instructions in the sheet,
+not only in chat.

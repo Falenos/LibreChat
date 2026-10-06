@@ -7,7 +7,7 @@ description: >-
   KNAUF logo.
 argument-hint: "[what to brand]"
 user-invocable: true
-version: "1.0.1"
+version: "1.1.0"
 ---
 
 # Knauf brand — the single source of truth
@@ -16,13 +16,19 @@ This file owns every Knauf colour value. No other skill, template, or artifact
 declares a hex — they transcribe the `KNAUF` const below. If a colour you need
 is not here, it is not a Knauf colour.
 
-Three references carry the rest:
+Four references carry the rest:
 
 | Read | When |
 |---|---|
 | `skills/karl-brand/references/charts.md` | Any chart, in any medium |
 | `skills/karl-brand/references/logo.md` | Any time the wordmark appears |
 | `skills/karl-brand/references/non-artifact.md` | Documents, decks, chat tables, email, spreadsheets |
+| `skills/karl-brand/references/office.md` | Word, PowerPoint, Excel or PDF files built in the code sandbox |
+
+Invoking this skill also mounts its tokens as Python, the wordmark and, where they are
+shipped, the Knauf font files in the code sandbox at `/mnt/data/karl-brand/`, which
+`karl-docx`, `karl-pptx`, `karl-xlsx` and `karl-pdf` build with. The font files
+themselves are never a deliverable.
 
 For artifact structure and layout templates, see `skills/karl-artifacts/SKILL.md`.
 

@@ -271,15 +271,44 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
     }
   });
 
-  it('still forbids the binary formats we genuinely cannot produce', () => {
-    // The original rule existed for a real reason, but the reason moved. KK20-257
-    // gave KARL a real sandbox, so .xlsx/.csv/.png/.md written to /mnt/data ARE
-    // delivered as downloads and the old blanket ban made it refuse the very
-    // deliverables the sandbox exists for. What the sandbox still cannot hand back is
-    // PDF/PPTX/DOCX/ZIP/audio/video, so that half must survive verbatim.
+  it('builds Word, PowerPoint and PDF files only when the format is named', () => {
+    // KK20-398: the sandbox has python-docx, python-pptx, reportlab, WeasyPrint and
+    // LibreOffice (knauf/docs/code-execution/sandbox-inventory.md) and the karl-docx,
+    // karl-pptx and karl-pdf skills, so the KK20-257 ban on those formats is lifted.
+    // Two things must survive it: an unqualified deck or report stays an artifact, so
+    // KARL never offers a file unprompted; and what the sandbox still cannot hand back
+    // (archives, audio, video) is still refused plainly.
     for (const spec of karlChatSpecs()) {
-      expect(spec.preset!.promptPrefix!).toMatch(/PDF/);
-      expect(spec.preset!.promptPrefix!).toMatch(/PPT\/PPTX, DOC\/DOCX, ZIP/);
+      const prompt = spec.preset!.promptPrefix!;
+      expect(prompt).not.toMatch(/PPT\/PPTX, DOC\/DOCX/);
+      expect(prompt).toMatch(/a Word document \(\.docx\), a PowerPoint deck \(\.pptx\) or a PDF/);
+      expect(prompt).toMatch(
+        /only when the user names that format or attaches such a file to change/i,
+      );
+      expect(prompt).toMatch(/karl-docx, karl-pptx or karl-pdf/);
+      expect(prompt).toMatch(/never offer, suggest or ask about one otherwise/i);
+      expect(prompt).toMatch(/Download menu \(PDF document\)/);
+      // Observed locally: asked for "a dummy PDF", KARL listed third-party PDF sites and
+      // asked for a page count before building it, then ended with a dead
+      // `sandbox:/mnt/data/...` link under the real download card.
+      expect(prompt).toMatch(/build the file in that reply/i);
+      expect(prompt).toMatch(
+        /instead of asking first or pointing the user to other tools or websites/i,
+      );
+      expect(prompt).toMatch(/never write a link to a generated file/i);
+      expect(prompt).toMatch(/If code execution is not available in this conversation/i);
+      expect(prompt).toMatch(/cannot produce at all is a ZIP or other archive, audio, or video/i);
+    }
+  });
+
+  it('sends document attachments to Upload files to edit before changing them', () => {
+    // PDF/DOCX/PPTX attachments go to file_search by default (file-config.ts); only the
+    // "Upload files to edit" row puts them in /mnt/data. Without this the model runs code
+    // on a file that is not there, or tells the user it cannot edit documents.
+    for (const spec of karlChatSpecs()) {
+      const prompt = spec.preset!.promptPrefix!;
+      expect(prompt).toMatch(/PDF, Word or PowerPoint attachment goes into file_search/i);
+      expect(prompt).toMatch(/attach it with Upload files to edit/i);
     }
   });
 
@@ -379,6 +408,10 @@ describe('[knauf] librechat.yaml — prompt does not contradict enabled capabili
     for (const spec of karlChatSpecs()) {
       expect(spec.preset!.promptPrefix!).toMatch(
         /presentation, deck or branded report is always a React artifact/i,
+      );
+      // KK20-398: the only exit from that rule is a named file format.
+      expect(spec.preset!.promptPrefix!).toMatch(
+        /React artifact unless the user names a PowerPoint \(\.pptx\), Word \(\.docx\) or PDF file/i,
       );
     }
   });

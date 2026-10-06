@@ -96,7 +96,7 @@ An Agent Builder can create and maintain private custom agents, configure the si
 
 ### What can an administrator do?
 
-An administrator manages users, groups, roles, permissions, agent publication, audiences, and platform configuration. Administrator status does not create a backend that has not been deployed; for example, Code Interpreter remains unavailable without a sandbox.
+An administrator manages users, groups, roles, permissions, agent publication, audiences, and platform configuration. Administrator status does not create a backend that has not been deployed.
 
 ### What is the difference between a role and a group?
 
@@ -334,15 +334,15 @@ No. Karl can preserve logical structure such as headings, paragraphs, lists, and
 
 ### Can Karl return the translation as a DOCX, PDF, PPTX, or XLSX file?
 
-No. The shipped configuration cannot generate downloadable Word, PDF, PowerPoint, Excel, CSV, ZIP, audio, or video files. Karl can provide the translated content in chat or a suitable artifact preview, or explain how to move it into the required application.
+Yes, when file translation is available in the chat or agent. Karl's file translation returns each translated file as a download, for PDF, DOCX, PPTX, XLSX, TXT, CSV and other supported formats. Layout is kept as far as the translator can, but check fonts, pagination and text that grew longer than its space.
 
 ### Can Karl translate tables or spreadsheets?
 
-Karl can translate readable cell content and reproduce a logical table, but cannot return a native XLSX file or guarantee formulas, styles, hidden cells, links, macros, validations, or workbook behaviour. Verify all structured data.
+Yes. File translation returns a translated XLSX or CSV as a download. It cannot guarantee formulas, styles, hidden cells, links, macros, validations, or workbook behaviour, so verify all structured data.
 
 ### Can Karl translate a presentation?
 
-Karl can translate readable slide content and create a presentation-style artifact preview. It cannot return a native PPTX or preserve the source deck's exact layout and animations.
+Yes. File translation returns a translated PPTX as a download. It cannot guarantee the source deck's exact layout and animations, so check slides where the translated text no longer fits.
 
 ### Can Karl summarise an uploaded file?
 
@@ -384,7 +384,7 @@ No. It is a previewed deliverable, not a native Office or PDF binary. Availabili
 
 ### Can Karl create a downloadable PDF, DOCX, PPTX, XLSX, CSV, or ZIP?
 
-No. Karl can provide the content as an artifact, a Markdown table, CSV-formatted text, or concise instructions for producing the file with an approved common tool, but must not claim that it generated the requested binary file.
+Yes, except ZIP, when code execution is available. Name the format ("as a Word document", "as a PowerPoint", "as a PDF", "in Excel") and Karl builds the file in its sandbox, in the Knauf brand, and attaches it as a download. Without a named format Karl builds a previewed artifact instead; an artifact can itself be downloaded as a PDF from its Download menu. Karl cannot produce ZIP archives, audio or video.
 
 ### Can Karl generate an image?
 
@@ -400,11 +400,11 @@ Yes, for ordinary reasoning and with the curated calculator tool when it is avai
 
 ### Can Karl write code?
 
-Karl can explain and draft code or configuration in chat. Code execution is disabled in the shipped configuration because no sandbox is deployed, so Karl must not claim it ran or verified the code unless another approved tool actually did so.
+Karl can explain and draft code or configuration in chat. It can also run Python in an isolated sandbox without internet access, mainly to analyse data and build files. It must not claim it ran or verified code that it did not actually run there.
 
 ### Can Karl edit my original document, spreadsheet, or presentation in place?
 
-No. Karl can propose revised content or create a preview, but it does not modify the source upload or return a native edited Office file.
+Karl never changes the uploaded original, but it can return an edited copy. Attach the Word, PowerPoint, Excel or PDF file with **Upload files to edit** and ask for the change; for Word, Karl can mark its edits as tracked changes or add comments. A file attached with plain **Upload files** can be searched and summarised but not edited.
 
 ### Can Karl send an email, update Jira, post to Teams, or change SharePoint?
 
