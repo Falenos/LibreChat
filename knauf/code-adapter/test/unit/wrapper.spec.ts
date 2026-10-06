@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { buildWrapper, parseSentinel, OUT_LOG } from '../../src/exec/wrapper.js';
 import { ACA_FILE_MANIFEST_NAME } from '../../src/types/aca.js';
@@ -102,5 +103,38 @@ describe('log names', () => {
     expect(plan.wrappedCode).toContain(ACA_FILE_MANIFEST_NAME);
     expect(plan.wrappedCode).toContain("os.walk('/mnt/data', followlinks=False)");
     expect(plan.wrappedCode).toContain('stat.S_ISREG');
+  });
+
+  // [knauf] KK20-397 — tool litter must not reach /mnt/data or the manifest.
+  it('keeps HOME and bytecode out of /mnt/data for the user subprocess', () => {
+    const plan = buildWrapper('bash', 'soffice --version', [], []);
+    expect(plan.wrappedCode).toContain('_env[\'HOME\'] = "/tmp/karl-home"');
+    expect(plan.wrappedCode).toContain("_env.setdefault('PYTHONDONTWRITEBYTECODE', '1')");
+    expect(plan.wrappedCode).toContain("cwd='/mnt/data', env=_env)");
+  });
+
+  it('prunes hidden directories, __pycache__ and *.pyc from the manifest walk, unless disabled', () => {
+    const on = buildWrapper('py', 'print(1)', [], [], { manifestMaxEntries: 7 });
+    expect(on.wrappedCode).toContain('_ignore_hidden = True');
+    expect(on.wrappedCode).toContain("d == '__pycache__'");
+    expect(on.wrappedCode).toContain("_name.endswith('.pyc')");
+    expect(on.wrappedCode).toContain('len(_manifest_files) >= 7');
+    const off = buildWrapper('py', 'print(1)', [], [], { ignoreHidden: false });
+    expect(off.wrappedCode).toContain('_ignore_hidden = False');
+  });
+
+  it('generates Python that compiles', () => {
+    const probe = spawnSync('python3', ['--version']);
+    if (probe.error != null || probe.status !== 0) {
+      return; // no local interpreter; the contract tests still cover the shape
+    }
+    const plan = buildWrapper('bash', 'echo ok', ['a b'], [{ from: '.karl_in_0', to: 'k/x.md' }]);
+    const compiled = spawnSync(
+      'python3',
+      ['-c', "import sys; compile(sys.stdin.read(), 'wrapper', 'exec')"],
+      { input: plan.wrappedCode },
+    );
+    expect(compiled.stderr.toString()).toBe('');
+    expect(compiled.status).toBe(0);
   });
 });

@@ -132,4 +132,27 @@ describe('sanitizeFilename (mirrors form.ts rules)', () => {
     // a double-quote would break the multipart Content-Disposition filename="…"
     expect(() => sanitizeFilename('a"b.csv')).toThrow(ValidationError);
   });
+  // [knauf] KK20-397 — nested names are now preserved at upload, so the rules bound them.
+  it('bounds depth and segment length', () => {
+    expect(sanitizeFilename(`${'d/'.repeat(11)}f.md`)).toBe(`${'d/'.repeat(11)}f.md`);
+    expect(() => sanitizeFilename(`${'d/'.repeat(12)}f.md`)).toThrow(ValidationError);
+    expect(() => sanitizeFilename(`${'a'.repeat(256)}.md`)).toThrow(ValidationError);
+  });
+
+  it('reserves the wrapper-owned .karl_ names', () => {
+    expect(() => sanitizeFilename('.karl_in_0')).toThrow(ValidationError);
+    expect(() => sanitizeFilename('.karl_files.json')).toThrow(ValidationError);
+    expect(() => sanitizeFilename('.karl_x/y.md')).toThrow(ValidationError);
+    expect(sanitizeFilename('reports/.karl_note.md')).toBe('reports/.karl_note.md');
+  });
+
+  it('allows only LibreChat-safe characters in directory segments, any in the leaf', () => {
+    expect(sanitizeFilename('karl-docx/scripts/karl_docx.py')).toBe(
+      'karl-docx/scripts/karl_docx.py',
+    );
+    expect(sanitizeFilename('données/résumé final.docx')).toBe('données/résumé final.docx');
+    expect(sanitizeFilename('Quarterly report (v2).docx')).toBe('Quarterly report (v2).docx');
+    expect(() => sanitizeFilename('dir with space/out.png')).toThrow(ValidationError);
+    expect(() => sanitizeFilename('a$b/out.png')).toThrow(ValidationError);
+  });
 });

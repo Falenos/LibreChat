@@ -165,6 +165,7 @@ An OOM kill is not graceful: in-flight executions die with a socket error, and t
 | Sandbox execution (platform)                                | ~220 s                           | ACA                                           |
 | Adapter → ACA (`ACA_EXEC_TIMEOUT_MS`)                       | 230 s                            | adapter env                                   |
 | Adapter → ACA file ops (`ACA_FILE_OP_TIMEOUT_MS`)           | 30 s                             | adapter env                                   |
+| Pushing inputs the code does not name (`EXEC_INPUT_PUSH_BUDGET_MS`) | 30 s, then the rest are skipped and noted | adapter env                                   |
 | Whole adapter request (`EXEC_TOTAL_TIMEOUT_MS`)             | 300 s                            | adapter env                                   |
 | Stateless session deletion                                  | 10 s, independent cleanup budget | adapter env                                   |
 | LibreChat → adapter, `readSandboxFile` / `writeSandboxFile` | 350 s                            | `CODE_EXEC_HELPER_TIMEOUT_MS` in `process.js` |
@@ -216,6 +217,7 @@ The adapter exposes Prometheus metrics on `/metrics` (unauthenticated, ClusterIP
 | Latency                 | `code_adapter_exec_duration_seconds`                                           | Success path only — failures are counted but not observed                                |
 | Contract drift          | `code_adapter_wrapper_parse_failures_total`                                    | The sentinel wrapper stopped parsing; exit codes are being synthesized                   |
 | Volume                  | `code_adapter_upload_bytes_total`                                              | Staging growth; pairs with the 24 h sliding TTL                                          |
+| Input selection         | `code_adapter_exec_input_refs`, `code_adapter_exec_inputs_omitted_total{reason}` | Refs per request and why some were not mounted (`budget`, `push_time`, `expired`, …). Rising `omitted` alongside `failure_reason=missing_file` means the ranking left out a file the code reached indirectly |
 
 `code_adapter_aca_request_duration_seconds{op}` (per-op: execute/pushFile/listFiles/
 fetchFileStream/fetchFileContent) and `code_adapter_truncation_recoveries_total` were previously
@@ -242,6 +244,7 @@ authoritative saturation signal), adapter pod memory against limit (§3), and
 | Long analyses truncated at ~220 s       | nothing to turn — it is a platform cap; the skills already tell the model to split work and persist to `/mnt/data` | —                                             |
 | Files expiring mid-conversation         | `FILE_TTL_HOURS` (24, sliding — bumped on every push/download)                                                     | adapter env                                   |
 | Too many generated files dropped        | `CAPTURE_MAX_FILES` (20)                                                                                           | adapter env                                   |
+| "N files were not mounted" too often    | `EXEC_INPUT_MAX_FILES` (32), `EXEC_INPUT_OPTIONAL_MAX_BYTES`, `EXEC_INPUT_PUSH_BUDGET_MS` — measure `pushFile` p95 first; each extra file is a serial push | adapter env                                   |
 
 Two knobs that look like scaling knobs and are not: `cooldownPeriodInSeconds` is already at the
 platform minimum, and adapter `replicaCount` buys nothing while the pool is the constraint —

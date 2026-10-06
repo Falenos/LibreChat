@@ -3,13 +3,19 @@ import { unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { Router } from 'express';
 import multer from 'multer';
-import { mintSessionId, parseIdentity, sanitizeFilename } from '../validate.js';
+import { mintSessionId, parseIdentity, sanitizeFilename, ValidationError } from '../validate.js';
+import { budgetedDiskStorage } from './budgetedDiskStorage.js';
+import type { NextFunction, Request, Response } from 'express';
 import type { AuthContext, BatchUploadFileResult, CodeEnvIdentity } from '../types/contract.js';
 import type { BlobStore } from '../azure/blobStore.js';
 import type { FilesRepo } from '../store/filesRepo.js';
 import type { Logger } from '../logger.js';
 import type { Metrics } from '../middleware/metrics.js';
 import type { Config } from '../config.js';
+
+/** Multipart framing tolerated on top of the file-byte budget by the declared-length check. */
+const MULTIPART_ALLOWANCE_BYTES = 64 * 1024;
+const MULTIPART_ALLOWANCE_PER_FILE = 8 * 1024;
 
 interface UploadDeps {
   config: Config;
@@ -30,18 +36,45 @@ interface UploadDeps {
  */
 export function createUploadRouter(deps: UploadDeps): Router {
   const router = Router();
+  const { batchMaxFiles, batchMaxTotalBytes, preservePaths } = deps.config.upload;
   const upload = multer({
-    dest: process.env.UPLOAD_TMP_DIR ?? tmpdir(),
+    // Disk spooling with the batch's aggregate byte budget enforced while parsing: a chunked
+    // body has no Content-Length, so the declared-length check below cannot see it.
+    storage: budgetedDiskStorage(process.env.UPLOAD_TMP_DIR ?? tmpdir(), batchMaxTotalBytes),
+    // Busboy strips the directory part of a multipart filename unless told otherwise, so a
+    // skill's `karl-xlsx/references/reading.md` arrived as `reading.md` and collided with
+    // every other skill's file of that name. `sanitizeFilename` below still rejects
+    // traversal, absolute paths and backslashes, which busboy keeps verbatim in this mode.
+    preservePath: preservePaths,
     // `files` matters as much as `fileSize` here. /upload/batch takes an unbounded array,
     // and every item is spooled to the container's writable layer. Without a count cap, one
     // request can exhaust ephemeral storage (which has no request/limit in the GitOps values).
-    // The cap matches CAPTURE_MAX_FILES: a batch larger than what one execution can hand
-    // back is not a shape we serve.
+    // It is its own knob: tying it to CAPTURE_MAX_FILES made a skill with 20+ bundled files
+    // fail to prime at all (413, and LibreChat then uploads nothing). The worst-case spool is
+    // batchMaxFiles × uploadMaxBytes without an aggregate cap; the storage engine above bounds
+    // it to batchMaxTotalBytes while parsing, whatever the request declares.
     // Busboy raises LIMIT_FILE_SIZE when the configured byte count is reached, so the
     // parser limit must be one byte beyond the documented inclusive application limit.
     // Files larger than uploadMaxBytes still reach the sentinel and are rejected.
-    limits: { fileSize: deps.config.uploadMaxBytes + 1, files: deps.config.exec.captureMaxFiles },
+    limits: { fileSize: deps.config.uploadMaxBytes + 1, files: batchMaxFiles },
   });
+
+  // The budget is file bytes, and the spooled-total check below enforces it exactly. The
+  // declared length also carries multipart framing — a boundary and part headers per file
+  // (the filename may be a 12-segment path) plus the identity fields — so the early check
+  // allows for that, bounded by the file cap, instead of rejecting a batch exactly at budget.
+  const declaredLimit =
+    batchMaxTotalBytes + MULTIPART_ALLOWANCE_BYTES + MULTIPART_ALLOWANCE_PER_FILE * batchMaxFiles;
+
+  /** Refuse a batch whose declared body cannot fit the aggregate budget, unparsed. */
+  const rejectDeclaredOversize = (req: Request, _res: Response, next: NextFunction) => {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > declaredLimit) {
+      next(new ValidationError('upload batch exceeds the maximum total size', 413));
+      return;
+    }
+    next();
+  };
 
   const stageOne = async (
     file: Express.Multer.File,
@@ -125,13 +158,18 @@ export function createUploadRouter(deps: UploadDeps): Router {
     })().catch(next);
   });
 
-  router.post('/upload/batch', upload.array('file'), (req, res, next) => {
+  router.post('/upload/batch', rejectDeclaredOversize, upload.array('file'), (req, res, next) => {
     void (async () => {
       const files = (req.files ?? []) as Express.Multer.File[];
       try {
         if (files.length === 0) {
           res.status(400).json({ error: 'at least one file is required' });
           return;
+        }
+        // The storage engine already enforced this while parsing; kept as the backstop that
+        // runs before anything reaches Blob or Table.
+        if (files.reduce((sum, f) => sum + f.size, 0) > batchMaxTotalBytes) {
+          throw new ValidationError('upload batch exceeds the maximum total size', 413);
         }
         const body = req.body as Record<string, unknown>;
         const identity = parseIdentity(body);

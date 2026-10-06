@@ -175,6 +175,18 @@ the adapter's staging store on every call:
   that references it then returns `code:1` + "re-attach the file and retry"
   rather than crashing.
 
+> **Not every ref is mounted (adapter 0.4.0, KK20-397).** LibreChat re-sends every file the
+> thread has produced on every run, with no cap, so a long document conversation soon carries
+> more refs than one exec should push. The adapter ranks them: files the code names are always
+> mounted (or the run fails with "split the work"), their top-level directory siblings next —
+> a skill's helper scripts and fonts — then the newest of the rest, up to 32 files / 64 MiB of
+> un-named inputs / a 30 s push budget. What it leaves out is listed in stderr with the fix
+> ("use the file's exact `/mnt/data` path"). An expired file the code names still fails with
+> "re-attach"; an expired one it does not name is skipped. Nested names (`karl-docx/scripts/…`)
+> are preserved at upload and land at that path. Capture never takes hidden segments,
+> `__pycache__/` or `*.pyc`, and never replaces a read-only file in place. Rollback levers:
+> `EXEC_INPUT_SELECTION=strict`, `UPLOAD_PRESERVE_PATHS=false`, `CAPTURE_IGNORE_HIDDEN=false`.
+
 > **Push order matters:** the re-push is **sequential, one file at a time**. ACA
 > dynamic-sessions file upload is _not_ concurrency-safe — pushing several files
 > in parallel to a session clobbers all but one (verified live, Aug 2026:

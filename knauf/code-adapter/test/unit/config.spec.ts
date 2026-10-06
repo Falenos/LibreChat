@@ -154,6 +154,33 @@ describe('loadConfig', () => {
     expect(config.cleanupEnabled).toBe(true);
     expect(config.jwt.issuer).toBe('librechat');
     expect(config.jwt.audience).toBe('codeapi');
+    // KK20-397 input selection and upload hardening.
+    expect(config.exec.inputSelection).toBe('ranked');
+    expect(config.exec.inputMaxFiles).toBe(32);
+    expect(config.exec.inputMaxRefs).toBe(256);
+    expect(config.exec.inputOptionalMaxBytes).toBe(67_108_864);
+    expect(config.exec.inputPushBudgetMs).toBe(30_000);
+    expect(config.exec.inputSiblingMaxFiles).toBe(16);
+    expect(config.exec.inputSiblingMaxBytes).toBe(33_554_432);
+    expect(config.exec.captureIgnoreHidden).toBe(true);
+    expect(config.exec.manifestMaxEntries).toBe(500);
+    expect(config.upload).toEqual({
+      preservePaths: true,
+      batchMaxFiles: 32,
+      batchMaxTotalBytes: 268_435_456,
+    });
+  });
+
+  it('keeps the pre-0.4 behaviours reachable as rollback levers', () => {
+    const config = loadConfig({
+      ...TEST_ENV_BASE,
+      EXEC_INPUT_SELECTION: 'strict',
+      UPLOAD_PRESERVE_PATHS: 'false',
+      CAPTURE_IGNORE_HIDDEN: 'false',
+    });
+    expect(config.exec.inputSelection).toBe('strict');
+    expect(config.upload.preservePaths).toBe(false);
+    expect(config.exec.captureIgnoreHidden).toBe(false);
   });
 
   it('allows cleanup to be disabled explicitly for a dark validation deployment', () => {

@@ -62,7 +62,30 @@ export interface Config {
      * Stopping early and saying so beats delivering nothing.
      */
     captureMaxTotalMs: number;
+    /**
+     * Skip hidden path segments (`.~lock.x#`, `.config/…`), `__pycache__/` and `*.pyc` in
+     * the post-exec manifest and capture. LibreOffice and Python leave these behind, and
+     * every one captured is delivered to the user and re-injected into every later exec.
+     */
+    captureIgnoreHidden: boolean;
+    /** Entries the post-exec manifest walk may record (wrapper + manifest parser). */
+    manifestMaxEntries: number;
+    /**
+     * Files pushed into one execution. In `ranked` selection this is a budget, not a
+     * rejection threshold: files the code names are always mounted, the rest fill up to it.
+     */
     inputMaxFiles: number;
+    /** Hard ceiling on file refs one request may carry, whatever the selection mode. */
+    inputMaxRefs: number;
+    /** `ranked` (default) mounts a prioritised subset; `strict` restores the pre-0.4 reject. */
+    inputSelection: 'ranked' | 'strict';
+    /** Byte budget for inputs the code does not name. */
+    inputOptionalMaxBytes: number;
+    /** Wall-clock budget for pushing inputs the code does not name. */
+    inputPushBudgetMs: number;
+    /** Directory siblings of a named file mounted unconditionally; the rest are optional. */
+    inputSiblingMaxFiles: number;
+    inputSiblingMaxBytes: number;
     inputMaxFileBytes: number;
     inputMaxTotalBytes: number;
     maxActiveRequests: number;
@@ -71,6 +94,19 @@ export interface Config {
   };
 
   uploadMaxBytes: number;
+
+  upload: {
+    /**
+     * Keep the directory part of multipart filenames. LibreChat sends skill files as
+     * `<skill>/<relativePath>`; without this busboy reduces them to the basename and two
+     * skills' `references/reading.md` overwrite each other in /mnt/data.
+     */
+    preservePaths: boolean;
+    /** Files per /upload/batch request. Decoupled from the capture cap. */
+    batchMaxFiles: number;
+    /** Aggregate bytes per /upload/batch request. */
+    batchMaxTotalBytes: number;
+  };
 
   table: {
     /** `https://<account>.table.core.windows.net`; null only for local connection-string mode. */
@@ -265,7 +301,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       // Sized against the response budget, not against the file caps: execTimeoutMs
       // (230s) + this must stay comfortably under `server.requestTimeout` (index.ts).
       captureMaxTotalMs: int('CAPTURE_MAX_TOTAL_MS', 60_000),
-      inputMaxFiles: int('EXEC_INPUT_MAX_FILES', 20),
+      captureIgnoreHidden: bool('CAPTURE_IGNORE_HIDDEN', true),
+      manifestMaxEntries: int('EXEC_MANIFEST_MAX_ENTRIES', 500),
+      inputMaxFiles: int('EXEC_INPUT_MAX_FILES', 32),
+      inputMaxRefs: int('EXEC_INPUT_MAX_REFS', 256),
+      inputSelection: str('EXEC_INPUT_SELECTION') === 'strict' ? 'strict' : 'ranked',
+      inputOptionalMaxBytes: int('EXEC_INPUT_OPTIONAL_MAX_BYTES', 67_108_864),
+      // Push + the 220s platform exec + capture must fit EXEC_TOTAL_TIMEOUT_MS (300s).
+      inputPushBudgetMs: int('EXEC_INPUT_PUSH_BUDGET_MS', 30_000),
+      // Siblings are exempt from the optional cap and the push budget, so they get their own
+      // bound: one directory must not force a long serial push before user code starts.
+      inputSiblingMaxFiles: int('EXEC_INPUT_SIBLING_MAX_FILES', 16),
+      inputSiblingMaxBytes: int('EXEC_INPUT_SIBLING_MAX_BYTES', 33_554_432),
       inputMaxFileBytes: int('EXEC_INPUT_MAX_FILE_BYTES', 134_217_728),
       inputMaxTotalBytes: int('EXEC_INPUT_MAX_TOTAL_BYTES', 268_435_456),
       maxActiveRequests: int('EXEC_MAX_ACTIVE_REQUESTS', 4),
@@ -273,6 +320,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       totalTimeoutMs: int('EXEC_TOTAL_TIMEOUT_MS', 300_000),
     },
     uploadMaxBytes: int('UPLOAD_MAX_BYTES', 134_217_728),
+    upload: {
+      preservePaths: bool('UPLOAD_PRESERVE_PATHS', true),
+      batchMaxFiles: int('UPLOAD_BATCH_MAX_FILES', 32),
+      batchMaxTotalBytes: int('UPLOAD_BATCH_MAX_TOTAL_BYTES', 268_435_456),
+    },
     table: {
       accountUrl: tableAccountUrl,
       tableName: str('TABLE_NAME') ?? 'codeAdapterFiles',

@@ -9,12 +9,21 @@ import {
 import { buildWrapper, parseSentinel, OUT_LOG, ERR_LOG } from './wrapper.js';
 import type { WrapperPlan } from './wrapper.js';
 import {
+  assignPushNames,
+  resolveCandidates,
   resolveInputs,
   movePlan,
   pushInputs,
   StagedFileMissingError,
   validateInputBudgets,
 } from './stagePush.js';
+import type { ResolvedInput } from './stagePush.js';
+import {
+  buildOmittedNote,
+  ReferencedInputsOverBudgetError,
+  selectInputs,
+} from './inputSelection.js';
+import type { OmittedInput } from './inputSelection.js';
 import type { AdmissionController } from './admission.js';
 import { captureOutputs, echoInputs, baselineFrom } from './capture.js';
 import type { SupportedLang } from '../validate.js';
@@ -139,10 +148,23 @@ export async function runExec(
       };
     };
 
-    if ((body.files?.length ?? 0) > deps.config.exec.inputMaxFiles) {
+    const execConfig = deps.config.exec;
+    const refs = body.files ?? [];
+    metrics.execInputRefs.observe(refs.length);
+    if (execConfig.inputSelection === 'strict' && refs.length > execConfig.inputMaxFiles) {
       return fail(
-        `Too many input files (maximum ${deps.config.exec.inputMaxFiles}). ` +
+        `Too many input files (maximum ${execConfig.inputMaxFiles}). ` +
           `Start a new turn with only the files needed for this command. ${NO_UNCHANGED_RETRY}`,
+        'too_many_inputs',
+      );
+    }
+    if (refs.length > execConfig.inputMaxRefs) {
+      // Ranked selection makes a long ref list harmless up to here; past it the request
+      // itself is the problem, and only a new conversation shortens it.
+      return fail(
+        `This conversation carries ${refs.length} files, more than one run can consider ` +
+          `(maximum ${execConfig.inputMaxRefs}). Start a new conversation and attach only ` +
+          `the files this task needs. ${NO_UNCHANGED_RETRY}`,
         'too_many_inputs',
       );
     }
@@ -152,9 +174,25 @@ export async function runExec(
       throw new ValidationError('adapter execution capacity is exhausted; retry later', 429);
     }
     try {
-      let inputs;
+      let inputs: ResolvedInput[];
+      let selection: ExecSelection = { mandatoryCount: 0, omitted: [], available: refs.length };
       try {
-        inputs = await resolveInputs(body.files ?? [], auth, deps.repo, signal);
+        if (execConfig.inputSelection === 'strict') {
+          inputs = await resolveInputs(refs, auth, deps.repo, signal);
+        } else {
+          const { found, missing } = await resolveCandidates(refs, auth, deps.repo, signal);
+          const selected = selectInputs(found, missing, {
+            code: body.code,
+            args: body.args ?? [],
+            config: execConfig,
+          });
+          inputs = assignPushNames(selected.selected);
+          selection = {
+            mandatoryCount: selected.mandatoryCount,
+            omitted: selected.omitted,
+            available: found.length + missing.length,
+          };
+        }
       } catch (err) {
         if (err instanceof StagedFileMissingError) {
           return fail(
@@ -163,9 +201,17 @@ export async function runExec(
             'expired_input',
           );
         }
+        if (err instanceof ReferencedInputsOverBudgetError) {
+          return fail(
+            `This command names ${err.referenced} input files, but one run can mount at most ` +
+              `${err.limit}. Split the work into steps that each use fewer files. ` +
+              NO_UNCHANGED_RETRY,
+            'too_many_inputs',
+          );
+        }
         throw err;
       }
-      const inputBytes = validateInputBudgets(inputs, deps.config.exec);
+      const inputBytes = validateInputBudgets(inputs, execConfig);
       metrics.execInputBytes.observe(inputBytes);
       if (admission.reserveInputBytes(inputBytes) != null) {
         throw new ValidationError('adapter execution capacity is exhausted; retry later', 429);
@@ -183,6 +229,7 @@ export async function runExec(
               derivedFromHint,
               reused: suppliedIsOwn,
             },
+            selection,
             signal,
           );
         return await runWithRecovery(runOnce, { sessionId, logger, fail, signal });
@@ -288,6 +335,15 @@ function isRetryableCapacity(err: unknown): err is AcaError {
   return err instanceof AcaError && err.statusCode === 429 && (err.retryAfterSeconds ?? 99) <= 5;
 }
 
+/** What ranked input selection decided, carried into the attempt for the model note. */
+interface ExecSelection {
+  /** Leading inputs the push deadline may not skip. */
+  mandatoryCount: number;
+  omitted: OmittedInput[];
+  /** Refs the request carried, for "N of M were not mounted". */
+  available: number;
+}
+
 /** How this attempt's session id was arrived at — drives the baseline and the echo. */
 interface SessionOrigin {
   /** From `runtime_session_hint`; echoed back as `runtime_session_id`. */
@@ -302,18 +358,37 @@ async function executeOnce(
   lang: SupportedLang,
   auth: AuthContext,
   sessionId: string,
-  inputs: Awaited<ReturnType<typeof resolveInputs>>,
+  selectedInputs: ResolvedInput[],
   deps: ExecDeps,
   origin: SessionOrigin,
+  selection: ExecSelection,
   signal: AbortSignal,
 ): Promise<ExecResponse> {
   const { derivedFromHint, reused: reusedSession } = origin;
   const { config, logger, metrics } = deps;
   const startedAt = Date.now();
 
-  if (inputs.length > 0) {
-    await pushInputs(inputs, sessionId, deps, signal);
+  // Only what actually landed in the sandbox may feed the move plan, capture and echo: a
+  // skipped nested input has no `.karl_in_<n>` to rename, and the wrapper would crash on it.
+  let inputs = selectedInputs;
+  const omitted = [...selection.omitted];
+  if (selectedInputs.length > 0) {
+    const { pushed, skipped } = await pushInputs(selectedInputs, sessionId, deps, signal, {
+      budgetMs: config.exec.inputSelection === 'strict' ? undefined : config.exec.inputPushBudgetMs,
+      mandatoryCount: selection.mandatoryCount,
+    });
+    inputs = pushed;
+    for (const input of skipped) {
+      omitted.push({ name: input.finalName, reason: 'push_time' });
+    }
   }
+  for (const entry of omitted) {
+    metrics.execInputsOmitted.inc({ reason: entry.reason });
+  }
+  const omittedNote = buildOmittedNote(omitted, {
+    available: selection.available,
+    limit: config.exec.inputMaxFiles,
+  });
 
   const baseline = await snapshotBaseline(
     sessionId,
@@ -328,7 +403,12 @@ async function executeOnce(
   // bash — raw bash can't run on a Python pool — so `EXEC_WRAPPER=off` only
   // sends raw code for `py`; bash always wraps.
   const useWrapper = config.exec.wrapper === 'full' || lang === 'bash';
-  const plan = useWrapper ? buildWrapper(lang, body.code, body.args ?? [], movePlan(inputs)) : null;
+  const plan = useWrapper
+    ? buildWrapper(lang, body.code, body.args ?? [], movePlan(inputs), {
+        manifestMaxEntries: config.exec.manifestMaxEntries,
+        ignoreHidden: config.exec.captureIgnoreHidden,
+      })
+    : null;
 
   const outcome = await deps.aca.execute(sessionId, plan?.wrappedCode ?? body.code, signal);
   const platformTimedOut =
@@ -346,7 +426,8 @@ async function executeOnce(
 
   let files = echoInputs(inputs);
   let stderr = out.stderr;
-  const notes: string[] = [];
+  // First among the notes, so it is read before any missing-file explanation below.
+  const notes: string[] = omittedNote != null ? [omittedNote] : [];
   if (out.code === 0) {
     const capture = await captureOutputs({
       sessionId,
@@ -370,7 +451,11 @@ async function executeOnce(
     }
   } else if (isMissingSandboxFile(stderr)) {
     notes.push(
-      `The requested file is not available in this sandbox. Use a path from the current Available files list, or re-attach the source file. ${NO_UNCHANGED_RETRY}`,
+      omittedNote != null
+        ? `The requested file is not available in this sandbox. If it is one of the files ` +
+            `listed above as not mounted, reference its exact /mnt/data path in the command; ` +
+            `otherwise re-attach the source file. ${NO_UNCHANGED_RETRY}`
+        : `The requested file is not available in this sandbox. Use a path from the current Available files list, or re-attach the source file. ${NO_UNCHANGED_RETRY}`,
     );
   } else if (stderr === '') {
     // The exit code is real, but the caller drops it: `@librechat/agents` (3.2.65,
@@ -406,6 +491,8 @@ async function executeOnce(
       exec_ms: outcome.executionMs,
       total_ms: Date.now() - startedAt,
       push_count: inputs.length,
+      refs_count: selection.available,
+      omitted_count: omitted.length,
       failure_reason: failureReason,
       stdout_bytes: Buffer.byteLength(out.stdout, 'utf8'),
       stderr_bytes: Buffer.byteLength(stderr, 'utf8'),

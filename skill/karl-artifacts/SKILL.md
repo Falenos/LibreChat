@@ -56,6 +56,10 @@ Rules of thumb:
   `/knauf/slides` renderer — never markdown and never a hand-written deck shell.
   The artifact supplies slide data; the renderer owns navigation, branding,
   responsive layout, light/dark colours, and PDF/PNG pagination.
+- A custom React experience that hides multiple sections behind next/previous
+  navigation must put `data-knauf-export-pages={total}` on a stable ancestor and
+  `data-knauf-export-next` on its forward button. Without those markers, PDF/PNG
+  export can capture only the currently visible state.
 - **"Document deliverable" is not a routing rule.** A deck and a branded report are document deliverables too, and both are react. Markdown is for output with no layout and no branding.
 - Charting real data → react + recharts. Drawing structure/process → mermaid. Never hand-draw charts in SVG.
 - A small animation with no state or controls → SVG. Animation that must loop,

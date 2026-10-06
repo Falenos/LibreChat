@@ -287,7 +287,16 @@ describe('POST /v1/exec contract', () => {
     expect(aca.pushed).toHaveLength(0);
   });
 
-  it('returns one non-retryable tool error when accumulated inputs exceed the limit', async () => {
+  it('strict selection keeps the pre-0.4 non-retryable error when inputs exceed the limit', async () => {
+    app = createApp({
+      config: testConfig({ EXEC_INPUT_SELECTION: 'strict', EXEC_INPUT_MAX_FILES: '20' }),
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics,
+    });
     const excessive = await request(app)
       .post('/v1/exec')
       .send({
@@ -334,11 +343,26 @@ describe('POST /v1/exec contract', () => {
       .post('/v1/exec')
       .send({
         lang: 'py',
-        code: 'print(1)',
+        code: "print(open('three.txt').read())",
         files: [{ id: doc.fileId, name: doc.filename, storage_session_id: doc.sessionId }],
       });
 
     expect(response.status).toBe(413);
+    expect(aca.pushed).toHaveLength(0);
+
+    // A file the code does not name is simply not mounted, and the model is told.
+    aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+    const unnamed = await request(app)
+      .post('/v1/exec')
+      .send({
+        lang: 'py',
+        code: 'print(1)',
+        files: [{ id: doc.fileId, name: doc.filename, storage_session_id: doc.sessionId }],
+      });
+    expect(unnamed.status).toBe(200);
+    expect(unnamed.body.code).toBe(0);
+    expect(unnamed.body.stderr).toContain('three.txt');
+    expect(unnamed.body.stderr).toContain('were not mounted');
     expect(aca.pushed).toHaveLength(0);
   });
 
@@ -866,7 +890,7 @@ describe('POST /v1/exec contract', () => {
       .post('/v1/exec')
       .send({
         lang: 'py',
-        code: 'print(1)',
+        code: "import pandas as pd; pd.read_csv('/mnt/data/gone.csv')",
         files: [
           {
             id: '11111111-1111-4111-8111-111111111111',
@@ -888,7 +912,12 @@ describe('POST /v1/exec contract', () => {
     let attempts = 0;
     aca.executeImpl = async (_sid, code) => {
       attempts += 1;
-      return sentinelOutcome(code, 1, '', "cat: /mnt/data/missing.csv: No such file or directory\n");
+      return sentinelOutcome(
+        code,
+        1,
+        '',
+        'cat: /mnt/data/missing.csv: No such file or directory\n',
+      );
     };
 
     const response = await request(app)
@@ -1104,5 +1133,226 @@ describe('POST /v1/exec contract', () => {
 
     const recovered = await metrics.truncationRecoveries.get();
     expect(recovered.values[0].value).toBe(1);
+  });
+  // [knauf] KK20-397 — ranked input selection. LibreChat re-sends every file a thread has
+  // produced on every run, so a hard "more than 20 inputs" reject broke every later run of
+  // a long conversation. The adapter now mounts what the code names plus the newest of the
+  // rest, and tells the model what it left out.
+  describe('ranked input selection (KK20-397)', () => {
+    const stage = async (
+      filename: string,
+      opts: { readOnly?: boolean; kind?: 'user' | 'skill'; sessionId?: string } = {},
+    ) => {
+      const data = Buffer.from(`content-of-${filename}`);
+      const doc = await repo.insertStaged({
+        sessionId: opts.sessionId ?? 'karl-' + 'e'.repeat(32),
+        filename,
+        size: data.length,
+        contentType: 'application/octet-stream',
+        origin: 'upload',
+        readOnly: opts.readOnly ?? false,
+        identity:
+          opts.kind === 'skill'
+            ? { kind: 'skill', id: 'skill-1', version: 1 }
+            : { kind: 'user', id: 'local' },
+        userId: 'local',
+        tenantId: 'local',
+      });
+      await blob.put(doc.blobPath, data, doc.contentType);
+      return doc;
+    };
+    const refOf = (
+      doc: { fileId: string; filename: string; sessionId: string },
+      name?: string,
+    ) => ({
+      id: doc.fileId,
+      name: name ?? doc.filename,
+      storage_session_id: doc.sessionId,
+      kind: 'user' as const,
+    });
+
+    it('runs with more inputs than one exec can mount: named files first, the rest noted', async () => {
+      const docs = [];
+      for (let i = 0; i < 40; i += 1) {
+        docs.push(await stage(`draft-${String(i).padStart(2, '0')}.docx`));
+      }
+      aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+
+      const response = await request(app)
+        .post('/v1/exec')
+        .send({
+          lang: 'bash',
+          code: 'python3 -B build.py /mnt/data/draft-03.docx /mnt/data/draft-07.docx',
+          files: docs.map((d) => refOf(d)),
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.code).toBe(0);
+      expect(aca.pushed).toHaveLength(32);
+      expect(aca.pushed.slice(0, 2).map((p) => p.name)).toEqual(['draft-03.docx', 'draft-07.docx']);
+      expect(aca.maxConcurrentPushes).toBe(1);
+      expect(response.body.stderr).toContain('8 of 40 available files were not mounted');
+    });
+
+    it('refuses a request that carries more refs than the hard ceiling', async () => {
+      app = createApp({
+        config: testConfig({ EXEC_INPUT_MAX_REFS: '3' }),
+        logger: testLogger(),
+        aca,
+        blob,
+        repo: repo.asRepo(),
+        metadataReadiness: async () => undefined,
+        metrics,
+      });
+      const response = await request(app)
+        .post('/v1/exec')
+        .send({
+          lang: 'py',
+          code: 'print(1)',
+          files: Array.from({ length: 4 }, (_, i) => ({ id: `f-${i}`, name: `f-${i}.txt` })),
+        });
+      expect(response.body).toMatchObject({ code: 1, files: [] });
+      expect(response.body.stderr).toContain('carries 4 files');
+      expect(response.body.stderr).toContain('Start a new conversation');
+    });
+
+    it('tells the model to split the work when the code names more files than fit', async () => {
+      app = createApp({
+        config: testConfig({ EXEC_INPUT_MAX_FILES: '2' }),
+        logger: testLogger(),
+        aca,
+        blob,
+        repo: repo.asRepo(),
+        metadataReadiness: async () => undefined,
+        metrics,
+      });
+      const docs = [await stage('a.csv'), await stage('b.csv'), await stage('c.csv')];
+      const response = await request(app)
+        .post('/v1/exec')
+        .send({ lang: 'bash', code: 'cat a.csv b.csv c.csv', files: docs.map((d) => refOf(d)) });
+      expect(response.body.code).toBe(1);
+      expect(response.body.stderr).toContain('names 3 input files');
+      expect(aca.pushed).toHaveLength(0);
+    });
+
+    it('skips an expired file the code does not name, and says so', async () => {
+      aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+      const response = await request(app)
+        .post('/v1/exec')
+        .send({
+          lang: 'py',
+          code: 'print(1)',
+          files: [
+            {
+              id: '22222222-2222-4222-8222-222222222222',
+              name: 'old.csv',
+              storage_session_id: 'karl-' + 'b'.repeat(32),
+              kind: 'user',
+            },
+          ],
+        });
+      expect(response.body.code).toBe(0);
+      expect(response.body.stderr).toContain('old.csv');
+      expect(response.body.stderr).toContain('have expired');
+    });
+
+    it('mounts a nested skill file at its nested path and echoes that path (F1 regression)', async () => {
+      const doc = await stage('karl-docx/scripts/karl_docx.py', { readOnly: true });
+      let submitted = '';
+      aca.executeImpl = async (_sid, code) => {
+        submitted = code;
+        return sentinelOutcome(code, 0, 'ok');
+      };
+      const response = await request(app)
+        .post('/v1/exec')
+        .send({
+          lang: 'bash',
+          code: 'python3 -B /mnt/data/karl-docx/scripts/karl_docx.py qa out.docx',
+          files: [refOf(doc)],
+        });
+      expect(response.body.code).toBe(0);
+      expect(aca.pushed.map((p) => p.name)).toEqual(['.karl_in_0']);
+      expect(submitted).toContain('karl-docx/scripts/karl_docx.py');
+      const echoed = response.body.files.find((f: { id: string }) => f.id === doc.fileId);
+      expect(echoed).toMatchObject({ name: 'karl-docx/scripts/karl_docx.py', inherited: true });
+    });
+
+    it('restores the nested path of an object staged flat by an older adapter', async () => {
+      // Pre-0.4 busboy stripped `karl-xlsx/references/reading.md` to `reading.md`; the
+      // client still refers to it by the nested name.
+      const doc = await stage('reading.md', { readOnly: true });
+      aca.executeImpl = async (_sid, code) => sentinelOutcome(code, 0, 'ok');
+      const response = await request(app)
+        .post('/v1/exec')
+        .send({
+          lang: 'bash',
+          code: 'cat /mnt/data/karl-xlsx/references/reading.md',
+          files: [refOf(doc, 'karl-xlsx/references/reading.md')],
+        });
+      expect(aca.pushed.map((p) => p.name)).toEqual(['.karl_in_0']);
+      const echoed = response.body.files.find((f: { id: string }) => f.id === doc.fileId);
+      expect(echoed.name).toBe('karl-xlsx/references/reading.md');
+    });
+  });
+
+  // [knauf] KK20-397 — LibreOffice and Python leave lock files, profiles and bytecode
+  // behind. Every file captured is delivered to the user and re-injected into every later
+  // exec, so tool litter must never be captured; reserved QA renders still are.
+  it('captures deliverables but not lock files, tool profiles or bytecode', async () => {
+    const stamp = '1787070000000000000';
+    const listed = [
+      'model.xlsx',
+      '.~lock.model.xlsx#',
+      '.config/libreoffice/4/user/registrymodifications.xcu',
+      '__pycache__/helper.cpython-312.pyc',
+      'helper.pyc',
+      '_karl_qa/sheet-1.png',
+    ];
+    aca.executeImpl = async (_sid, code) => {
+      aca.sessionFiles = listed.map((name) => ({
+        name,
+        type: 'File',
+        sizeInBytes: 1,
+        lastModifiedAt: stamp,
+      }));
+      return sentinelOutcome(code, 0, 'ok');
+    };
+    for (const name of listed) {
+      aca.fileContents.set(name, Buffer.from('x'));
+    }
+
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(1)' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.files.map((f: { name: string }) => f.name).sort()).toEqual([
+      '_karl_qa/sheet-1.png',
+      'model.xlsx',
+    ]);
+  });
+
+  it('keeps capturing hidden files when CAPTURE_IGNORE_HIDDEN=false', async () => {
+    app = createApp({
+      config: testConfig({ CAPTURE_IGNORE_HIDDEN: 'false' }),
+      logger: testLogger(),
+      aca,
+      blob,
+      repo: repo.asRepo(),
+      metadataReadiness: async () => undefined,
+      metrics,
+    });
+    aca.executeImpl = async (_sid, code) => {
+      aca.sessionFiles = [
+        {
+          name: '.env.example',
+          type: 'File',
+          sizeInBytes: 1,
+          lastModifiedAt: '1787070000000000000',
+        },
+      ];
+      return sentinelOutcome(code, 0, 'ok');
+    };
+    aca.fileContents.set('.env.example', Buffer.from('x'));
+    const response = await request(app).post('/v1/exec').send({ lang: 'py', code: 'print(1)' });
+    expect(response.body.files.map((f: { name: string }) => f.name)).toEqual(['.env.example']);
   });
 });

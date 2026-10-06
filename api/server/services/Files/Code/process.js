@@ -38,6 +38,12 @@ const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { convertImage } = require('~/server/services/Files/images/convert');
 const { getRetentionExpiry } = require('~/server/services/Files/retention');
 const { determineFileType } = require('~/server/utils');
+// [knauf] KK20-397 — QA renders and font files never become attachments.
+const {
+  isPrivateQaRender,
+  blockedCodeOutputReason,
+} = require('~/server/services/Files/knauf/codeOutputPolicy');
+// End [knauf]
 
 const axios = createAxiosInstance();
 
@@ -333,6 +339,13 @@ const processCodeOutput = async ({
   messageId,
   session_id,
 }) => {
+  // [knauf] KK20-397 — visual-QA renders (`_karl_qa/…`) are the model's working material:
+  // no download, no file record, no attachment, nothing re-sent into later runs.
+  if (isPrivateQaRender(name)) {
+    logger.debug(`[processCodeOutput] Skipping private QA render "${name}"`);
+    return null;
+  }
+  // End [knauf]
   const appConfig = req.config;
   const currentDate = new Date();
   // [knauf] KK20-316 — distinguish a staged output from a failed adapter download.
@@ -375,6 +388,19 @@ const processCodeOutput = async ({
     // End [knauf]
 
     const buffer = Buffer.from(response.data, 'binary');
+
+    // [knauf] KK20-397 — never deliver a font file, a copy of a sandbox-only skill asset, or a
+    // plain archive of fonts. Checked before the size fallback (which would hand out a download
+    // link) and before any file record is claimed. Fonts embedded in a generated document are
+    // not affected.
+    const blockedReason = blockedCodeOutputReason({ name, buffer });
+    if (blockedReason != null) {
+      logger.warn(
+        `[processCodeOutput] Not delivering "${name}" (${blockedReason}) | conv=${conversationId}`,
+      );
+      return null;
+    }
+    // End [knauf]
 
     // Enforce file size limit
     if (buffer.length > fileSizeLimit) {

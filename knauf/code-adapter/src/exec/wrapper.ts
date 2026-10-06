@@ -21,7 +21,21 @@ export const OUT_LOG = '.karl_out.log';
 export const ERR_LOG = '.karl_err.log';
 const INLINE_OUT_BYTES = 3000;
 const INLINE_ERR_BYTES = 700;
-const FILE_MANIFEST_MAX_ENTRIES = 100;
+/** Default for direct callers (tests); execService passes EXEC_MANIFEST_MAX_ENTRIES. */
+const FILE_MANIFEST_MAX_ENTRIES = 500;
+/** Where HOME points when the pool's own HOME would put dotfiles under /mnt/data. */
+const SAFE_HOME = '/tmp/karl-home';
+
+export interface WrapperOptions {
+  /** Entries the post-exec manifest walk may record before it reports truncation. */
+  manifestMaxEntries?: number;
+  /**
+   * Leave hidden segments, `__pycache__/` and `*.pyc` out of the manifest. LibreOffice
+   * (`.~lock.x#`, `.config/libreoffice/…`) and Python bytecode would otherwise be captured,
+   * delivered to the user, and overflow the manifest before real deliverables are listed.
+   */
+  ignoreHidden?: boolean;
+}
 
 export interface WrapperPlan {
   delimiter: string;
@@ -57,7 +71,10 @@ export function buildWrapper(
   code: string,
   args: string[],
   moves: MoveInstruction[],
+  options: WrapperOptions = {},
 ): WrapperPlan {
+  const manifestMaxEntries = options.manifestMaxEntries ?? FILE_MANIFEST_MAX_ENTRIES;
+  const ignoreHidden = (options.ignoreHidden ?? true) ? 'True' : 'False';
   const delimiter = `KARL_${randomBytes(6).toString('hex')}`;
   const encoded = b64(code);
   const userFile = lang === 'bash' ? '/tmp/karl_user.sh' : '/tmp/karl_user.py';
@@ -77,12 +94,21 @@ export function buildWrapper(
     '    _p.parent.mkdir(parents=True, exist_ok=True)',
     `    pathlib.Path('/mnt/data', _src).rename(_p)`,
     `pathlib.Path(${JSON.stringify(userFile)}).write_bytes(base64.b64decode(${JSON.stringify(encoded)}))`,
+    // Tools that write under $HOME (LibreOffice's profile, fontconfig's cache) must not
+    // land in /mnt/data, where every file is captured and delivered. Bytecode likewise:
+    // importing a helper that lives in /mnt/data would otherwise leave __pycache__ there.
+    '_env = dict(os.environ)',
+    `_home = os.path.realpath(_env.get('HOME') or '/mnt/data')`,
+    `if _home == '/mnt/data' or _home.startswith('/mnt/data/'):`,
+    `    pathlib.Path(${JSON.stringify(SAFE_HOME)}).mkdir(parents=True, exist_ok=True)`,
+    `    _env['HOME'] = ${JSON.stringify(SAFE_HOME)}`,
+    `_env.setdefault('PYTHONDONTWRITEBYTECODE', '1')`,
     `_out_path = pathlib.Path('/mnt/data/${OUT_LOG}')`,
     `_err_path = pathlib.Path('/mnt/data/${ERR_LOG}')`,
     `_out_file = _out_path.open('wb')`,
     `_err_file = _err_path.open('wb')`,
     'try:',
-    `    _r = subprocess.run(${argvPrefix} + json.loads(${argsJson}), stdout=_out_file, stderr=_err_file, cwd='/mnt/data')`,
+    `    _r = subprocess.run(${argvPrefix} + json.loads(${argsJson}), stdout=_out_file, stderr=_err_file, cwd='/mnt/data', env=_env)`,
     'finally:',
     '    _out_file.close()',
     '    _err_file.close()',
@@ -103,13 +129,17 @@ export function buildWrapper(
     '    _manifest_files = []',
     '    _manifest_truncated = False',
     '    _manifest_deadline = time.monotonic() + 2.0',
+    `    _ignore_hidden = ${ignoreHidden}`,
     `    for _root, _dirs, _files in os.walk('/mnt/data', followlinks=False):`,
     '        if time.monotonic() > _manifest_deadline:',
     '            _manifest_truncated = True',
     '            break',
-    '        _dirs[:] = [d for d in _dirs if not pathlib.Path(_root, d).is_symlink()]',
+    '        _dirs[:] = [d for d in _dirs if not pathlib.Path(_root, d).is_symlink()',
+    `                    and not (_ignore_hidden and (d.startswith('.') or d == '__pycache__'))]`,
     '        for _name in _files:',
-    `            if len(_manifest_files) >= ${FILE_MANIFEST_MAX_ENTRIES} or time.monotonic() > _manifest_deadline:`,
+    `            if _ignore_hidden and (_name.startswith('.') or _name.endswith('.pyc')):`,
+    '                continue',
+    `            if len(_manifest_files) >= ${manifestMaxEntries} or time.monotonic() > _manifest_deadline:`,
     '                _manifest_truncated = True',
     '                break',
     '            _path = pathlib.Path(_root, _name)',
