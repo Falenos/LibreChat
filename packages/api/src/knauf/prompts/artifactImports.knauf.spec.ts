@@ -48,6 +48,8 @@ describe('[knauf] artifacts prompt — sandbox import rules', () => {
         generateArtifactsPrompt({ endpoint, artifacts: KARL_ARTIFACT_MODE as never }) ?? '';
       expect(prompt).toContain("import { KnaufSlideDeck } from '/knauf/slides';");
       expect(prompt).toContain('Supply one data object per requested slide');
+      expect(prompt).toContain('data-knauf-export-pages={total}');
+      expect(prompt).toContain('data-knauf-export-next');
     }
   });
 
