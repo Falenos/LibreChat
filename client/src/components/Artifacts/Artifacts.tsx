@@ -20,6 +20,8 @@ import store from '~/store';
 // [knauf] Artifact share/export actions live in fork-isolated components. (NO-TICKET)
 import ShareArtifactButton from '~/knauf/components/Artifacts/ShareArtifactButton';
 import ArtifactDownloadMenu from '~/knauf/components/Artifacts/ArtifactDownloadMenu';
+// End [knauf]
+// [knauf] KK20-410 — closing Preview invalidates pending revision opens.
 import { cancelArtifactRevisionOpen } from '~/knauf/utils/artifactRevisions';
 // End [knauf]
 

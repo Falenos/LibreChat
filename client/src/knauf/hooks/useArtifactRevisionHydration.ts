@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useSetRecoilState } from 'recoil';
 import type { Artifact, ArtifactRevisionEntry } from '~/common';
@@ -39,6 +39,14 @@ export default function useArtifactRevisionHydration({
     key: string;
     history: ArtifactRevisionEntry[];
   } | null>(null);
+
+  useEffect(() => {
+    return () => {
+      historyRequestRef.current += 1;
+      loadedHistoryRef.current = null;
+      rootRevisionTimeRef.current = null;
+    };
+  }, [messageId]);
 
   return useCallback(
     ({ artifactKey, currentArtifact, directiveVersion, now }: ArtifactRevisionHydration) => {

@@ -15,6 +15,7 @@ KK20-410 applies to generated `:::artifact` directives stored in chat messages. 
 - The latest source remains in the original assistant message.
 - Each successful edit stores compact inverse patches plus base/content SHA-256 hashes in its tool output.
 - The history endpoint returns lightweight version, title, type, language, and availability metadata. It validates continuity between persisted hashes and does not reconstruct every source snapshot.
+- Fully persisted histories are not version-capped. Inferred gaps are bounded so a legacy model-authored outlier cannot force dense allocation up to an arbitrary stored version.
 - The exact revision endpoint reconstructs only the selected version and validates every applied inverse patch and hash before returning source.
 - Missing or inconsistent history never substitutes the latest source under an older version number.
 
@@ -22,7 +23,7 @@ KK20-410 applies to generated `:::artifact` directives stored in chat messages. 
 
 - Preview stores lightweight lineage metadata and caches exact snapshots only after they are opened.
 - The client replaces model-authored directive versions with the authenticated history endpoint's current version before registering the latest artifact.
-- One global request generation controls Preview selection. A later click on any artifact or version supersedes every earlier in-flight selection.
+- One global request generation controls Preview selection. A later click on any artifact card or version supersedes every earlier in-flight selection.
 - Closing Preview or changing conversation scope invalidates the current generation, so a late response cannot reopen a panel the user closed.
 - Historical timestamps are anchored so the latest source remains the newest entry in global artifact ordering.
 - During a rolling deployment, the legacy exact endpoint is used only when the history request itself returns 404. Failures from an exact snapshot request remain visible.

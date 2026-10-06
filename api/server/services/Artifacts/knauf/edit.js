@@ -356,6 +356,8 @@ const readStoredRevisions = (messages, messageId, identifier) => {
   return revisions;
 };
 
+const MAX_INFERRED_MISSING_REVISIONS = 1000;
+
 const resolveArtifactRevisionState = (messages, target, messageId, identifier) => {
   const revisions = readStoredRevisions(messages, messageId, identifier);
   if (revisions.size === 0) {
@@ -365,6 +367,14 @@ const resolveArtifactRevisionState = (messages, target, messageId, identifier) =
   let currentVersion = 1;
   for (const version of revisions.keys()) {
     currentVersion = Math.max(currentVersion, version);
+  }
+  const inferredMissingRevisions = currentVersion - revisions.size - 1;
+  if (inferredMissingRevisions > MAX_INFERRED_MISSING_REVISIONS) {
+    throw new ArtifactEditError(
+      'Artifact revision history contains an unbounded version gap',
+      'invalid_revision',
+      409,
+    );
   }
   const currentRevision = revisions.get(currentVersion);
   if (

@@ -1,5 +1,5 @@
 import { RecoilRoot, useRecoilValue } from 'recoil';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { Artifact } from '~/components/Artifacts/Artifact';
 import store from '~/store';
@@ -7,6 +7,7 @@ import store from '~/store';
 const mockGetArtifactRevisionHistory = jest.fn();
 const mockGetArtifactRevision = jest.fn();
 let mockArtifactBody = 'EDITED VERSION TWO';
+let mockMessageId = 'message-1';
 
 jest.mock('~/knauf/data-provider/data-service', () => ({
   getArtifactRevision: (...args: unknown[]) => mockGetArtifactRevision(...args),
@@ -18,7 +19,7 @@ jest.mock('~/knauf/utils/artifactBody', () => ({
 }));
 
 jest.mock('~/Providers', () => ({
-  useMessageContext: () => ({ messageId: 'message-1' }),
+  useMessageContext: () => ({ messageId: mockMessageId }),
   useArtifactContext: () => ({ getNextIndex: () => 0, resetCounter: jest.fn() }),
 }));
 
@@ -63,6 +64,7 @@ describe('Artifact root revision binding', () => {
       version: 1,
     });
     mockArtifactBody = 'EDITED VERSION TWO';
+    mockMessageId = 'message-1';
   });
 
   it('keeps the root card on version 1 after the persisted source advances to version 2', async () => {
@@ -353,6 +355,106 @@ describe('Artifact root revision binding', () => {
       expect(screen.getByTestId('artifact-registry')).toHaveTextContent('knaufRevisionHistory'),
     );
     expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores history responses from a previous message scope', async () => {
+    let resolveFirstHistory!: (value: {
+      currentVersion: number;
+      revisions: Array<{
+        title: string;
+        type: string;
+        version: number;
+        available: boolean;
+      }>;
+    }) => void;
+    const firstHistory = new Promise<{
+      currentVersion: number;
+      revisions: Array<{
+        title: string;
+        type: string;
+        version: number;
+        available: boolean;
+      }>;
+    }>((resolve) => {
+      resolveFirstHistory = resolve;
+    });
+    mockGetArtifactRevisionHistory.mockImplementation(({ messageId }: { messageId: string }) =>
+      messageId === 'message-1'
+        ? firstHistory
+        : Promise.resolve({
+            currentVersion: 1,
+            revisions: [
+              {
+                title: 'Versioning Probe',
+                type: 'application/vnd.react',
+                version: 1,
+                available: true,
+              },
+            ],
+          }),
+    );
+    const props = {
+      node: {},
+      id: 'ignored',
+      lastUpdateTime: 0,
+      identifier: 'versioning-probe',
+      title: 'Versioning Probe',
+      type: 'application/vnd.react',
+      version: '2',
+      children: <code>{'EDITED VERSION TWO'}</code>,
+    } as ComponentProps<typeof Artifact> & { version: string };
+
+    const { rerender } = render(
+      <RecoilRoot>
+        <Artifact {...props} />
+        <Registry />
+      </RecoilRoot>,
+    );
+    await waitFor(() =>
+      expect(mockGetArtifactRevisionHistory).toHaveBeenCalledWith({
+        messageId: 'message-1',
+        identifier: 'versioning-probe',
+      }),
+    );
+
+    mockMessageId = 'message-2';
+    mockArtifactBody = 'CONVERSATION TWO';
+    rerender(
+      <RecoilRoot>
+        <Artifact {...props} />
+        <Registry />
+      </RecoilRoot>,
+    );
+    await waitFor(() =>
+      expect(mockGetArtifactRevisionHistory).toHaveBeenCalledWith({
+        messageId: 'message-2',
+        identifier: 'versioning-probe',
+      }),
+    );
+
+    await act(async () => {
+      resolveFirstHistory({
+        currentVersion: 2,
+        revisions: [
+          {
+            title: 'Versioning Probe',
+            type: 'application/vnd.react',
+            version: 1,
+            available: true,
+          },
+          {
+            title: 'Versioning Probe',
+            type: 'application/vnd.react',
+            version: 2,
+            available: true,
+          },
+        ],
+      });
+      await firstHistory;
+    });
+
+    expect(screen.getByTestId('artifact-registry')).toHaveTextContent('message-2');
+    expect(screen.getByTestId('artifact-registry')).not.toHaveTextContent('message-1');
   });
 
   it('keeps the root card on Version 1 when an older API pod lacks the history route', async () => {

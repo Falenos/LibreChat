@@ -470,6 +470,47 @@ export default function Dashboard() {
     );
   });
 
+  test('rejects unbounded legacy version gaps without allocating dense history', () => {
+    const source = 'legacy current source';
+    const messages = [
+      {
+        messageId: 'assistant-1',
+        text: artifact('dashboard', source).replace(
+          'title="Demo"',
+          `title="Demo" version="${Number.MAX_SAFE_INTEGER}"`,
+        ),
+      },
+      {
+        messageId: 'assistant-2',
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                title: 'Demo',
+                version: Number.MAX_SAFE_INTEGER,
+                base_sha256: sha256('legacy previous source'),
+                content_sha256: sha256(source),
+                inverse_patches: [],
+              }),
+            },
+          },
+        ],
+      },
+    ];
+
+    expect(() =>
+      getArtifactRevisionHistory(messages, {
+        messageId: 'assistant-1',
+        identifier: 'dashboard',
+      }),
+    ).toThrow(expect.objectContaining({ code: 'invalid_revision', status: 409 }));
+  });
+
   test('projects metadata without applying inverse patches for every revision', () => {
     const messages = [
       {

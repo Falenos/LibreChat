@@ -7,7 +7,7 @@ import FilePreview from '~/components/Chat/Input/Files/FilePreview';
 import { cn, getFileType, logger, isArtifactRoute } from '~/utils';
 import { useLocalize } from '~/hooks';
 import store from '~/store';
-// [knauf] KK20-410 — closing a selected card cancels pending revision opens.
+// [knauf] KK20-410 — every artifact-card click supersedes pending revision opens.
 import { cancelArtifactRevisionOpen } from '~/knauf/utils/artifactRevisions';
 // End [knauf]
 
@@ -60,8 +60,8 @@ const ArtifactButton = ({ artifact }: { artifact: Artifact | null }) => {
     <div className="group relative my-4 rounded-xl text-sm text-text-primary">
       {(() => {
         const handleClick = () => {
+          cancelArtifactRevisionOpen();
           if (isSelected) {
-            cancelArtifactRevisionOpen();
             resetCurrentArtifactId();
             setVisible(false);
             return;

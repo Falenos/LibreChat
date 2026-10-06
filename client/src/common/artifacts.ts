@@ -4,6 +4,7 @@ export interface CodeBlock {
   content: string;
 }
 
+// [knauf] KK20-410 — persisted revision metadata for generated chat artifacts.
 export interface ArtifactRevisionEntry {
   id: string | null;
   version: number;
@@ -12,6 +13,7 @@ export interface ArtifactRevisionEntry {
   type?: string;
   language?: string;
 }
+// End [knauf]
 
 export interface Artifact {
   id: string;

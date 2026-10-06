@@ -94,11 +94,19 @@ export function Artifact({
     const identifier = props.identifier ?? defaultIdentifier;
     const parsedVersion = Number.parseInt(String(props.version ?? 1), 10);
     const version = Number.isSafeInteger(parsedVersion) && parsedVersion > 0 ? parsedVersion : 1;
+    // [knauf] KK20-410 — stable generated-artifact keys include the message lineage.
     const artifactKey = artifactRootId({ identifier, type, title, messageId });
+    const defaultArtifactKey = artifactRootId({
+      identifier: defaultIdentifier,
+      type: defaultType,
+      title: defaultTitle,
+      messageId,
+    });
+    // End [knauf]
 
     throttledUpdateRef.current(() => {
       const now = Date.now();
-      if (artifactKey === `${defaultIdentifier}_${defaultType}_${defaultTitle}_${messageId}`) {
+      if (artifactKey === defaultArtifactKey) {
         return;
       }
 
