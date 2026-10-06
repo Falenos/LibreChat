@@ -565,10 +565,32 @@ export default function Dashboard() {
   });
 
   test('never substitutes the latest content when a historical patch is unavailable', () => {
+    const source = 'orange';
     const messages = [
       {
         messageId: 'assistant-1',
-        text: artifact('dashboard', 'orange').replace('title="Demo"', 'title="Demo" version="3"'),
+        text: artifact('dashboard', source).replace('title="Demo"', 'title="Demo" version="3"'),
+      },
+      {
+        messageId: 'assistant-3',
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                title: 'Demo',
+                version: 3,
+                base_sha256: sha256('pink'),
+                content_sha256: sha256(source),
+                inverse_patches: [{ start: 0, old: 'pink', new_length: source.length }],
+              }),
+            },
+          },
+        ],
       },
     ];
 
@@ -576,7 +598,7 @@ export default function Dashboard() {
       getArtifactRevisionSnapshot(messages, {
         messageId: 'assistant-1',
         identifier: 'dashboard',
-        version: 2,
+        version: 1,
       }),
     ).toThrow(expect.objectContaining({ code: 'revision_unavailable', status: 409 }));
   });

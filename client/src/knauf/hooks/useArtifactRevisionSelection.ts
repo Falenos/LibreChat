@@ -71,6 +71,10 @@ export default function useArtifactRevisionSelection({
     versionSelectionRequestRef.current += 1;
     setArtifactVersionError(false);
     setIsArtifactVersionLoading(false);
+    return () => {
+      cancelArtifactRevisionOpen();
+      versionSelectionRequestRef.current += 1;
+    };
   }, [scopeKey]);
 
   const selectArtifactVersion = useCallback(

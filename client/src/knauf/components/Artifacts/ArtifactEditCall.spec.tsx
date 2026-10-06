@@ -227,6 +227,41 @@ describe('ArtifactEditCall', () => {
     expect(screen.getByTestId('selection')).toHaveTextContent('null:false:');
   });
 
+  it('does not reopen an artifact after its conversation card unmounts', async () => {
+    const pending = deferred<{
+      title: string;
+      type: string;
+      content: string;
+      version: number;
+    }>();
+    mockGetArtifactRevision.mockReturnValue(pending.promise);
+    const view = render(
+      <RecoilRoot>
+        <ArtifactEditCall result={parseArtifactEditResult(output)!} />
+        <Selection />
+      </RecoilRoot>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_updated_file:Sales dashboard' }));
+    await waitFor(() => expect(mockGetArtifactRevision).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <RecoilRoot>
+        <Selection />
+      </RecoilRoot>,
+    );
+    await act(async () => {
+      pending.resolve({
+        title: 'Sales dashboard',
+        type: 'application/vnd.react',
+        content: 'departed conversation snapshot',
+        version: 2,
+      });
+    });
+
+    expect(screen.getByTestId('selection')).toHaveTextContent('null:true:');
+  });
+
   it('opens distinct immutable snapshots for historical version cards', async () => {
     mockGetArtifactRevisionHistory.mockResolvedValue({
       currentVersion: 3,

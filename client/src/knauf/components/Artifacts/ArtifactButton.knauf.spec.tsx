@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { RecoilRoot, useRecoilValue } from 'recoil';
 import ArtifactButton from '~/components/Artifacts/ArtifactButton';
 import store from '~/store';
@@ -62,7 +62,7 @@ describe('ArtifactButton revision cancellation seam', () => {
       </RecoilRoot>,
     );
 
-    screen.getByRole('button').click();
+    fireEvent.click(screen.getByRole('button'));
 
     expect(mockCancelArtifactRevisionOpen).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('selection')).toHaveTextContent('artifact-2:true');

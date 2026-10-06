@@ -24,6 +24,7 @@ KK20-410 applies to generated `:::artifact` directives stored in chat messages. 
 - Preview stores lightweight lineage metadata and caches exact snapshots only after they are opened.
 - The client replaces model-authored directive versions with the authenticated history endpoint's current version before registering the latest artifact.
 - One global request generation controls Preview selection. A later click on any artifact card or version supersedes every earlier in-flight selection.
+- Request owners invalidate their in-flight generation on unmount, so navigation cannot repopulate global artifact state from a departed conversation even while Preview is closed.
 - Closing Preview or changing conversation scope invalidates the current generation, so a late response cannot reopen a panel the user closed.
 - Historical timestamps are anchored so the latest source remains the newest entry in global artifact ordering.
 - During a rolling deployment, the legacy exact endpoint is used only when the history request itself returns 404. Failures from an exact snapshot request remain visible.

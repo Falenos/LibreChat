@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRecoilState, useSetRecoilState } from 'recoil';
 import type { Artifact } from '~/common';
 import FilePreview from '~/components/Chat/Input/Files/FilePreview';
@@ -10,6 +10,7 @@ import {
 import {
   artifactRevisionId,
   beginArtifactRevisionOpen,
+  cancelArtifactRevisionOpen,
   finishArtifactRevisionOpen,
   isCurrentArtifactRevisionOpen,
   isArtifactRevisionHistoryUnavailable,
@@ -60,10 +61,25 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
   const setCurrentArtifactId = useSetRecoilState(store.currentArtifactId);
   const setArtifactsVisible = useSetRecoilState(store.artifactsVisibility);
   const revisionId = artifactRevisionId(result);
+  const activeRequestRef = useRef<number | null>(null);
+  const requestGenerationRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      requestGenerationRef.current += 1;
+      const requestId = activeRequestRef.current;
+      if (requestId != null && isCurrentArtifactRevisionOpen(requestId)) {
+        cancelArtifactRevisionOpen();
+      }
+      activeRequestRef.current = null;
+    };
+  }, []);
 
   const handleOpen = async () => {
     const lineage = { messageId: result.messageId, identifier: result.identifier };
     const requestId = beginArtifactRevisionOpen();
+    const requestGeneration = ++requestGenerationRef.current;
+    activeRequestRef.current = requestId;
     setFailed(false);
     setIsLoading(true);
     try {
@@ -159,7 +175,12 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
         setFailed(true);
       }
     } finally {
-      setIsLoading(false);
+      if (requestGeneration === requestGenerationRef.current) {
+        setIsLoading(false);
+      }
+      if (activeRequestRef.current === requestId) {
+        activeRequestRef.current = null;
+      }
       finishArtifactRevisionOpen(requestId);
     }
   };

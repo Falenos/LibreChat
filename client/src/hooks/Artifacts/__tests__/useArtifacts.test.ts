@@ -663,6 +663,70 @@ describe('useArtifacts', () => {
       });
       expect(mockSetCurrentArtifactId).toHaveBeenCalledWith('dashboard-v1');
     });
+
+    it('ignores a pending selected revision after the artifact owner unmounts', async () => {
+      const history = [
+        {
+          id: 'dashboard-v1',
+          version: 1,
+          available: true,
+          title: 'Sales dashboard',
+          type: 'application/vnd.react',
+        },
+        {
+          id: 'dashboard-v2',
+          version: 2,
+          available: true,
+          title: 'Revenue dashboard',
+          type: 'application/vnd.react',
+        },
+      ];
+      const artifacts = {
+        'dashboard-v2': createArtifact({
+          id: 'dashboard-v2',
+          title: 'Revenue dashboard',
+          lastUpdateTime: 2000,
+          knaufRevision: { identifier: 'dashboard', version: 2 },
+          knaufRevisionHistory: history,
+        }),
+      };
+      (useRecoilValue as jest.Mock).mockImplementation((atom) =>
+        atom?.key === 'artifactsState' ? artifacts : {},
+      );
+      (useRecoilState as jest.Mock).mockReturnValue(['dashboard-v2', mockSetCurrentArtifactId]);
+      let resolveSnapshot!: (snapshot: {
+        title: string;
+        type: string;
+        content: string;
+        version: number;
+      }) => void;
+      mockGetArtifactRevision.mockReturnValue(
+        new Promise((resolve) => {
+          resolveSnapshot = resolve;
+        }),
+      );
+      const { result, unmount } = renderHook(() => useArtifacts());
+      let selection!: Promise<void>;
+
+      act(() => {
+        selection = result.current.selectArtifactVersion(0);
+      });
+      expect(mockGetArtifactRevision).toHaveBeenCalledTimes(1);
+      unmount();
+      await act(async () => {
+        resolveSnapshot({
+          title: 'Sales dashboard',
+          type: 'application/vnd.react',
+          content: 'late version one',
+          version: 1,
+        });
+        await selection;
+      });
+
+      expect(mockSetArtifacts).not.toHaveBeenCalled();
+      expect(mockSetVisibleArtifacts).not.toHaveBeenCalled();
+      expect(mockSetCurrentArtifactId).not.toHaveBeenCalled();
+    });
     // End [knauf]
 
     it('should return -1 for non-existent artifact', () => {

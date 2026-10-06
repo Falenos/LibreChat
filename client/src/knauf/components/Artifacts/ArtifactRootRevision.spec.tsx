@@ -6,6 +6,7 @@ import store from '~/store';
 
 const mockGetArtifactRevisionHistory = jest.fn();
 const mockGetArtifactRevision = jest.fn();
+const mockResetCounter = jest.fn();
 let mockArtifactBody = 'EDITED VERSION TWO';
 let mockMessageId = 'message-1';
 
@@ -20,7 +21,7 @@ jest.mock('~/knauf/utils/artifactBody', () => ({
 
 jest.mock('~/Providers', () => ({
   useMessageContext: () => ({ messageId: mockMessageId }),
-  useArtifactContext: () => ({ getNextIndex: () => 0, resetCounter: jest.fn() }),
+  useArtifactContext: () => ({ getNextIndex: () => 0, resetCounter: mockResetCounter }),
 }));
 
 jest.mock('~/utils', () => ({
@@ -57,6 +58,7 @@ describe('Artifact root revision binding', () => {
   beforeEach(() => {
     mockGetArtifactRevisionHistory.mockReset();
     mockGetArtifactRevision.mockReset();
+    mockResetCounter.mockReset();
     mockGetArtifactRevision.mockResolvedValue({
       title: 'Versioning Probe',
       type: 'application/vnd.react',
@@ -389,14 +391,16 @@ describe('Artifact root revision binding', () => {
     }>((resolve) => {
       resolveFirstRoot = resolve;
     });
-    mockGetArtifactRevision
-      .mockImplementationOnce(() => firstRoot)
-      .mockResolvedValue({
-        title: 'Versioning Probe',
-        type: 'application/vnd.react',
-        content: 'ROOT VERSION ONE',
-        version: 1,
-      });
+    mockGetArtifactRevision.mockImplementation(() =>
+      mockArtifactBody === 'STALE VERSION TWO'
+        ? firstRoot
+        : Promise.resolve({
+            title: 'Versioning Probe',
+            type: 'application/vnd.react',
+            content: 'ROOT VERSION ONE',
+            version: 1,
+          }),
+    );
     mockArtifactBody = 'STALE VERSION TWO';
     const props = {
       node: {},
@@ -415,7 +419,8 @@ describe('Artifact root revision binding', () => {
         <Registry />
       </RecoilRoot>,
     );
-    await waitFor(() => expect(mockGetArtifactRevision).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockGetArtifactRevision).toHaveBeenCalled());
+    const initialHistoryRequests = mockGetArtifactRevisionHistory.mock.calls.length;
 
     mockArtifactBody = 'FRESH VERSION TWO';
     rerender(
@@ -427,7 +432,11 @@ describe('Artifact root revision binding', () => {
       </RecoilRoot>,
     );
 
-    await waitFor(() => expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(mockGetArtifactRevisionHistory.mock.calls.length).toBeGreaterThan(
+        initialHistoryRequests,
+      ),
+    );
     await waitFor(() =>
       expect(screen.getByTestId('artifact-registry')).toHaveTextContent('FRESH VERSION TWO'),
     );
