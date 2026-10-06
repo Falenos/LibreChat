@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { RecoilRoot, useRecoilValue, useSetRecoilState } from 'recoil';
 import store from '~/store';
+import { cancelArtifactRevisionOpen } from '~/knauf/utils/artifactRevisions';
 import ArtifactEditCall, { parseArtifactEditResult } from './ArtifactEditCall';
 
 const mockGetArtifactRevisionHistory = jest.fn();
@@ -54,6 +55,7 @@ function CloseArtifact() {
       type="button"
       data-testid="close-artifact"
       onClick={() => {
+        cancelArtifactRevisionOpen();
         setArtifacts(null);
         setCurrentArtifactId(null);
         setVisible(false);
@@ -191,6 +193,38 @@ describe('ArtifactEditCall', () => {
       ),
     );
     expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reopen Preview when a pending revision finishes after close', async () => {
+    const pending = deferred<{
+      title: string;
+      type: string;
+      content: string;
+      version: number;
+    }>();
+    mockGetArtifactRevision.mockReturnValue(pending.promise);
+
+    render(
+      <RecoilRoot initializeState={({ set }) => set(store.artifactsVisibility, true)}>
+        <ArtifactEditCall result={parseArtifactEditResult(output)!} />
+        <CloseArtifact />
+        <Selection />
+      </RecoilRoot>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_updated_file:Sales dashboard' }));
+    await waitFor(() => expect(mockGetArtifactRevision).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId('close-artifact'));
+
+    await act(async () => {
+      pending.resolve({
+        title: 'Sales dashboard',
+        type: 'application/vnd.react',
+        content: 'late snapshot',
+        version: 2,
+      });
+    });
+    expect(screen.getByTestId('selection')).toHaveTextContent('null:false:');
   });
 
   it('opens distinct immutable snapshots for historical version cards', async () => {

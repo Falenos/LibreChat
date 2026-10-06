@@ -1,17 +1,11 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { Constants } from 'librechat-data-provider';
-import { useRecoilState, useRecoilValue, useResetRecoilState, useSetRecoilState } from 'recoil';
-import type { Artifact } from '~/common';
+import { useRecoilState, useRecoilValue, useResetRecoilState } from 'recoil';
 import { isCodeOnlyArtifact } from '~/utils/artifacts';
 import { useArtifactsContext } from '~/Providers';
-import { getArtifactRevision } from '~/knauf/data-provider/data-service';
-import {
-  beginArtifactRevisionOpen,
-  finishArtifactRevisionOpen,
-  isCurrentArtifactRevisionOpen,
-  mergeArtifactRevisionRegistry,
-  projectArtifactRevisionSnapshot,
-} from '~/knauf/utils/artifactRevisions';
+// [knauf] KK20-410 — keep revision selection orchestration in fork-owned code.
+import useArtifactRevisionSelection from '~/knauf/hooks/useArtifactRevisionSelection';
+// End [knauf]
 import { logger } from '~/utils';
 import store from '~/store';
 
@@ -47,9 +41,6 @@ export default function useArtifacts() {
   // End [knauf]
 
   const artifacts = useRecoilValue(store.artifactsState);
-  const visibleArtifacts = useRecoilValue(store.visibleArtifacts);
-  const setArtifacts = useSetRecoilState(store.artifactsState);
-  const setVisibleArtifacts = useSetRecoilState(store.visibleArtifacts);
   const resetArtifacts = useResetRecoilState(store.artifactsState);
   const resetCurrentArtifactId = useResetRecoilState(store.currentArtifactId);
   const [currentArtifactId, setCurrentArtifactId] = useRecoilState(store.currentArtifactId);
@@ -219,112 +210,13 @@ export default function useArtifacts() {
     }
   }, [latestMessageId]);
 
-  // [knauf] KK20-410 — derive traversal from immutable lineage metadata, not global render order.
-  const currentArtifact = currentArtifactId != null ? artifacts?.[currentArtifactId] : null;
-  const artifactVersions = useMemo(() => {
-    const revision = currentArtifact?.knaufRevision;
-    if (!revision || !currentArtifact?.messageId) {
-      return [];
-    }
-    if (currentArtifact.knaufRevisionHistory != null) {
-      return currentArtifact.knaufRevisionHistory;
-    }
-    const availableVersions = Object.values(artifacts ?? {})
-      .filter(
-        (artifact): artifact is NonNullable<typeof artifact> =>
-          artifact != null &&
-          artifact.messageId === currentArtifact.messageId &&
-          artifact.knaufRevision?.identifier === revision.identifier,
-      )
-      .sort(
-        (left, right) => (left.knaufRevision?.version ?? 0) - (right.knaufRevision?.version ?? 0),
-      )
-      .map((artifact) => ({
-        id: artifact.id,
-        version: artifact.knaufRevision?.version ?? 0,
-        available: true,
-      }));
-    const versions = new Map<number, { id: string | null; version: number; available: boolean }>();
-    for (const available of availableVersions) {
-      versions.set(available.version, available);
-    }
-    return [...versions.values()].sort((left, right) => left.version - right.version);
-  }, [artifacts, currentArtifact]);
-  const currentIndex = artifactVersions.findIndex(({ id }) => id === currentArtifactId);
-  const [isArtifactVersionLoading, setIsArtifactVersionLoading] = useState(false);
-  const [artifactVersionError, setArtifactVersionError] = useState(false);
-  const versionSelectionRequestRef = useRef(0);
-  useEffect(() => {
-    setArtifactVersionError(false);
-    setIsArtifactVersionLoading(false);
-  }, [currentArtifactId]);
-  const selectArtifactVersion = useCallback(
-    async (index: number) => {
-      const target = artifactVersions[index];
-      const revision = currentArtifact?.knaufRevision;
-      const messageId = currentArtifact?.messageId;
-      if (!target?.available || !target.id || !revision || !messageId) {
-        return;
-      }
-      const lineage = { messageId, identifier: revision.identifier };
-      const requestId = beginArtifactRevisionOpen();
-      const localRequestId = ++versionSelectionRequestRef.current;
-      setArtifactVersionError(false);
-      setIsArtifactVersionLoading(true);
-      try {
-        const cached = artifacts?.[target.id] ?? visibleArtifacts?.[target.id];
-        const selected =
-          cached?.content != null
-            ? { ...cached, knaufRevisionHistory: artifactVersions }
-            : projectArtifactRevisionSnapshot({
-                snapshot: await getArtifactRevision({
-                  ...lineage,
-                  version: target.version,
-                }),
-                base: {
-                  messageId,
-                  identifier: revision.identifier,
-                  index: currentArtifact.index,
-                },
-                rootTime:
-                  currentArtifact.lastUpdateTime -
-                  Math.max((currentArtifact.knaufRevision?.version ?? 1) - 1, 0),
-                history: artifactVersions,
-              });
-        if (!isCurrentArtifactRevisionOpen(requestId)) {
-          return;
-        }
-        const register = (current: Record<string, Artifact | undefined> | null) =>
-          mergeArtifactRevisionRegistry({
-            current,
-            additions: [selected],
-            ...lineage,
-            history: artifactVersions,
-          });
-        setArtifacts(register);
-        setVisibleArtifacts(register);
-        setCurrentArtifactId(selected.id);
-      } catch {
-        if (isCurrentArtifactRevisionOpen(requestId)) {
-          setArtifactVersionError(true);
-        }
-      } finally {
-        if (localRequestId === versionSelectionRequestRef.current) {
-          setIsArtifactVersionLoading(false);
-        }
-        finishArtifactRevisionOpen(requestId);
-      }
-    },
-    [
-      artifactVersions,
-      artifacts,
-      currentArtifact,
-      setArtifacts,
-      setCurrentArtifactId,
-      setVisibleArtifacts,
-      visibleArtifacts,
-    ],
-  );
+  // [knauf] KK20-410 — fork-owned selection derives and opens persisted revisions.
+  const revisionSelection = useArtifactRevisionSelection({
+    artifacts,
+    currentArtifactId,
+    scopeKey: conversationId,
+    setCurrentArtifactId,
+  });
   // End [knauf]
 
   return {
@@ -333,13 +225,13 @@ export default function useArtifacts() {
     // theirs and survives the reconciliation above.
     setActiveTab: selectActiveTab,
     // End [knauf]
-    currentIndex,
-    currentArtifact,
+    currentIndex: revisionSelection.currentIndex,
+    currentArtifact: revisionSelection.currentArtifact,
     // [knauf] KK20-410 — expose the lineage-scoped selector model to the Preview panel.
-    artifactVersions,
-    artifactVersionError,
-    isArtifactVersionLoading,
-    selectArtifactVersion,
+    artifactVersions: revisionSelection.artifactVersions,
+    artifactVersionError: revisionSelection.artifactVersionError,
+    isArtifactVersionLoading: revisionSelection.isArtifactVersionLoading,
+    selectArtifactVersion: revisionSelection.selectArtifactVersion,
     // End [knauf]
     orderedArtifactIds,
     setCurrentArtifactId,

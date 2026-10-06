@@ -125,6 +125,46 @@ describe('Artifact root revision binding', () => {
     });
   });
 
+  it('normalizes a model-authored directive version to the server history version', async () => {
+    mockGetArtifactRevisionHistory.mockResolvedValue({
+      currentVersion: 1,
+      revisions: [
+        {
+          title: 'Versioning Probe',
+          type: 'application/vnd.react',
+          version: 1,
+          available: true,
+        },
+      ],
+    });
+    mockArtifactBody = 'UNTRUSTED VERSION ATTRIBUTE';
+    const props = {
+      node: {},
+      id: 'ignored',
+      lastUpdateTime: 0,
+      identifier: 'versioning-probe',
+      title: 'Versioning Probe',
+      type: 'application/vnd.react',
+      version: '10000',
+      children: <code>{'UNTRUSTED VERSION ATTRIBUTE'}</code>,
+    } as ComponentProps<typeof Artifact> & { version: string };
+
+    render(
+      <RecoilRoot>
+        <Artifact {...props} />
+        <Registry />
+      </RecoilRoot>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('root-artifact')).toHaveTextContent('UNTRUSTED VERSION ATTRIBUTE'),
+    );
+    const registry = screen.getByTestId('artifact-registry');
+    expect(registry).toHaveTextContent('"version":1');
+    expect(registry).not.toHaveTextContent('version:10000');
+    expect(mockGetArtifactRevision).not.toHaveBeenCalled();
+  });
+
   it('keeps Version 1 before all later immutable revisions', async () => {
     mockGetArtifactRevisionHistory
       .mockResolvedValueOnce({

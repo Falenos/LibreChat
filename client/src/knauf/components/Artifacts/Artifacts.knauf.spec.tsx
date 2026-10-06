@@ -2,6 +2,8 @@ import { act, render, screen } from '@testing-library/react';
 import { RecoilRoot } from 'recoil';
 import Artifacts from '~/components/Artifacts/Artifacts';
 
+const mockCancelArtifactRevisionOpen = jest.fn();
+
 const sharedArtifact = {
   id: 'artifact-1',
   title: 'Status page',
@@ -44,6 +46,10 @@ jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string) => key,
 }));
 
+jest.mock('~/knauf/utils/artifactRevisions', () => ({
+  cancelArtifactRevisionOpen: () => mockCancelArtifactRevisionOpen(),
+}));
+
 jest.mock('~/components/Messages/Content/CopyButton', () => ({
   __esModule: true,
   default: () => null,
@@ -66,6 +72,7 @@ jest.mock('~/knauf/components/Artifacts/ShareArtifactButton', () => ({
 
 describe('Artifacts artifact-only share seam', () => {
   beforeEach(() => {
+    mockCancelArtifactRevisionOpen.mockReset();
     jest.useFakeTimers();
   });
 
@@ -86,5 +93,20 @@ describe('Artifacts artifact-only share seam', () => {
 
     expect(screen.getByTestId('share-artifact')).toBeInTheDocument();
     expect(screen.getByTestId('artifact-download')).toBeInTheDocument();
+  });
+
+  it('cancels pending revision opens when Preview closes', () => {
+    render(
+      <RecoilRoot>
+        <Artifacts />
+      </RecoilRoot>,
+    );
+
+    act(() => {
+      jest.advanceTimersByTime(50);
+    });
+    screen.getByRole('button', { name: 'com_ui_close' }).click();
+
+    expect(mockCancelArtifactRevisionOpen).toHaveBeenCalledTimes(1);
   });
 });

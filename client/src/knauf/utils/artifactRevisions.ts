@@ -57,6 +57,11 @@ export const finishArtifactRevisionOpen = (requestId: number) => {
   }
 };
 
+export const cancelArtifactRevisionOpen = () => {
+  nextOpenRequestId += 1;
+  activeOpenRequestId = null;
+};
+
 export const projectArtifactRevisionHistory = ({
   history,
   messageId,
@@ -134,9 +139,16 @@ export const mergeArtifactRevisionRegistry = ({
   history: ArtifactRevisionEntry[];
 }) => {
   const merged = { ...current };
+  const validIds = new Set(
+    history.flatMap((revision) => (revision.available && revision.id ? [revision.id] : [])),
+  );
   for (const [id, artifact] of Object.entries(merged)) {
     if (artifact?.messageId === messageId && artifact.knaufRevision?.identifier === identifier) {
-      merged[id] = { ...artifact, knaufRevisionHistory: history };
+      if (!validIds.has(id)) {
+        delete merged[id];
+      } else {
+        merged[id] = { ...artifact, knaufRevisionHistory: history };
+      }
     }
   }
   for (const artifact of additions) {

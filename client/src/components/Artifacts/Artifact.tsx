@@ -11,20 +11,10 @@ import { logger, isArtifactRoute } from '~/utils';
 // see the call site in `updateArtifact` below.
 import { extractArtifactBody } from '~/knauf/utils/artifactBody';
 // End [knauf]
-import { artifactsState, visibleArtifacts } from '~/store/artifacts';
-// [knauf] KK20-410 — hydrate the complete immutable revision lineage.
-import {
-  getArtifactRevision,
-  getArtifactRevisionHistory,
-} from '~/knauf/data-provider/data-service';
-import {
-  artifactRevisionId,
-  artifactRootId,
-  isArtifactRevisionHistoryUnavailable,
-  mergeArtifactRevisionRegistry,
-  projectArtifactRevisionHistory,
-  projectArtifactRevisionSnapshot,
-} from '~/knauf/utils/artifactRevisions';
+import { artifactsState } from '~/store/artifacts';
+// [knauf] KK20-410 — keep revision hydration in fork-owned code.
+import useArtifactRevisionHydration from '~/knauf/hooks/useArtifactRevisionHydration';
+import { artifactRootId } from '~/knauf/utils/artifactRevisions';
 // End [knauf]
 import ArtifactButton from './ArtifactButton';
 
@@ -71,12 +61,13 @@ export function Artifact({
   const artifactIndex = useRef(getNextIndex(false)).current;
 
   const setArtifacts = useSetRecoilState(artifactsState);
-  const setVisibleArtifacts = useSetRecoilState(visibleArtifacts);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
-  // [knauf] NO-TICKET — keep Version 1's sort position stable across later revisions.
-  const rootRevisionTimeRef = useRef<{ lineageKey: string; time: number } | null>(null);
-  const historyRequestRef = useRef(0);
-  const loadedHistoryRef = useRef<string | null>(null);
+  // [knauf] KK20-410 — server-owned history normalizes directive metadata and binds V1.
+  const hydrateArtifactRevision = useArtifactRevisionHydration({
+    isArtifactPage: isArtifactRoute(location.pathname),
+    messageId,
+    setArtifact,
+  });
   // End [knauf]
 
   const throttledUpdateRef = useRef(
@@ -123,150 +114,19 @@ export function Artifact({
         knaufRevision: { identifier, version },
       };
 
-      // [knauf] KK20-410 — the backend advances the source message in place but
-      // retains inverse patches. Hydrate bounded lineage metadata, then fetch
-      // only V1 for this source card; other exact snapshots load on selection.
-      if (version > 1 && isArtifactRoute(location.pathname)) {
-        const revisionId = artifactRevisionId({ messageId, identifier, version });
-        const latest = { ...currentArtifact, id: revisionId };
-        const lineageKey = `${messageId}:${identifier}`;
-        const historyKey = `${lineageKey}:${version}:${title}:${type}`;
-        const registerLatest = (artifacts: Record<string, Artifact | undefined> | null) => ({
-          ...artifacts,
-          [revisionId]: {
-            ...latest,
-            knaufRevisionHistory: artifacts?.[revisionId]?.knaufRevisionHistory,
-          },
-        });
-        setArtifacts(registerLatest);
-        setVisibleArtifacts(registerLatest);
-
-        if (loadedHistoryRef.current === historyKey) {
-          return;
-        }
-        loadedHistoryRef.current = historyKey;
-        const requestId = ++historyRequestRef.current;
-        void (async () => {
-          let history;
-          try {
-            history = await getArtifactRevisionHistory({ messageId, identifier });
-          } catch (error) {
-            if (requestId !== historyRequestRef.current) {
-              return;
-            }
-            if (!isArtifactRevisionHistoryUnavailable(error)) {
-              setArtifact(latest);
-              return;
-            }
-            try {
-              const snapshot = await getArtifactRevision({
-                messageId,
-                identifier,
-                version: 1,
-              });
-              if (requestId !== historyRequestRef.current) {
-                return;
-              }
-              const fallbackHistory = [
-                {
-                  id: artifactKey,
-                  version: 1,
-                  available: true,
-                  title: snapshot.title,
-                  type: snapshot.type,
-                  language: snapshot.language,
-                },
-                {
-                  id: revisionId,
-                  version,
-                  available: true,
-                  title,
-                  type,
-                  language: currentArtifact.language,
-                },
-              ];
-              const original = projectArtifactRevisionSnapshot({
-                snapshot,
-                base: currentArtifact,
-                rootTime: now - version + 1,
-                history: fallbackHistory,
-              });
-              const latestWithHistory = {
-                ...latest,
-                knaufRevisionHistory: fallbackHistory,
-              };
-              const registerOriginal = (artifacts: Record<string, Artifact | undefined> | null) =>
-                mergeArtifactRevisionRegistry({
-                  current: artifacts,
-                  additions: [latestWithHistory, original],
-                  messageId,
-                  identifier,
-                  history: fallbackHistory,
-                });
-              setArtifacts(registerOriginal);
-              setVisibleArtifacts(registerOriginal);
-              setArtifact(original);
-            } catch {
-              if (requestId === historyRequestRef.current) {
-                setArtifact(latest);
-              }
-            }
-            return;
-          }
-
-          try {
-            const previousRoot = rootRevisionTimeRef.current;
-            const rootRevisionTime =
-              previousRoot?.lineageKey === lineageKey ? previousRoot.time : now - version + 1;
-            rootRevisionTimeRef.current = { lineageKey, time: rootRevisionTime };
-            const revisionHistory = projectArtifactRevisionHistory({
-              history,
-              messageId,
-              identifier,
-            });
-            const latestWithHistory = { ...latest, knaufRevisionHistory: revisionHistory };
-            const rootRevision = revisionHistory.find(
-              (revision) => revision.available && revision.version === 1,
-            );
-            const original = rootRevision
-              ? projectArtifactRevisionSnapshot({
-                  snapshot: await getArtifactRevision({
-                    messageId,
-                    identifier,
-                    version: 1,
-                  }),
-                  base: currentArtifact,
-                  rootTime: rootRevisionTime,
-                  history: revisionHistory,
-                })
-              : null;
-            if (requestId !== historyRequestRef.current) {
-              return;
-            }
-            const registerHistory = (artifacts: Record<string, Artifact | undefined> | null) => ({
-              ...mergeArtifactRevisionRegistry({
-                current: artifacts,
-                additions: original ? [latestWithHistory, original] : [latestWithHistory],
-                messageId,
-                identifier,
-                history: revisionHistory,
-              }),
-            });
-            setArtifacts(registerHistory);
-            setVisibleArtifacts(registerHistory);
-            setArtifact(original ?? latestWithHistory);
-          } catch {
-            if (requestId === historyRequestRef.current) {
-              setArtifact(latest);
-            }
-          }
-        })();
+      // [knauf] KK20-410 — fork-owned hydration handles persisted revision lineages.
+      if (
+        hydrateArtifactRevision({
+          artifactKey,
+          currentArtifact,
+          directiveVersion: version,
+          now,
+        })
+      ) {
         return;
       }
       // End [knauf]
 
-      historyRequestRef.current += 1;
-      loadedHistoryRef.current = null;
       if (!isArtifactRoute(location.pathname)) {
         return setArtifact(currentArtifact);
       }
@@ -297,7 +157,7 @@ export function Artifact({
     messageId,
     artifactIndex,
     location.pathname,
-    setVisibleArtifacts,
+    hydrateArtifactRevision,
   ]);
 
   useEffect(() => {

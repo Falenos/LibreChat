@@ -20,6 +20,7 @@ import store from '~/store';
 // [knauf] Artifact share/export actions live in fork-isolated components. (NO-TICKET)
 import ShareArtifactButton from '~/knauf/components/Artifacts/ShareArtifactButton';
 import ArtifactDownloadMenu from '~/knauf/components/Artifacts/ArtifactDownloadMenu';
+import { cancelArtifactRevisionOpen } from '~/knauf/utils/artifactRevisions';
 // End [knauf]
 
 const MAX_BLUR_AMOUNT = 32;
@@ -199,6 +200,9 @@ export default function Artifacts() {
   };
 
   const closeArtifacts = () => {
+    // [knauf] KK20-410 — a completed request must not reopen a panel the user closed.
+    cancelArtifactRevisionOpen();
+    // End [knauf]
     if (isMobile) {
       setIsClosing(true);
       setIsVisible(false);
