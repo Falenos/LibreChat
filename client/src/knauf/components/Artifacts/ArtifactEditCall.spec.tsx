@@ -1,7 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { RecoilRoot, useRecoilValue, useSetRecoilState } from 'recoil';
+import type { Artifact, ArtifactRevisionEntry } from '~/common';
 import store from '~/store';
-import { cancelArtifactRevisionOpen } from '~/knauf/utils/artifactRevisions';
+import {
+  cancelArtifactRevisionOpen,
+  mergeArtifactRevisionRegistry,
+} from '~/knauf/utils/artifactRevisions';
 import ArtifactEditCall, { parseArtifactEditResult } from './ArtifactEditCall';
 
 const mockGetArtifactRevisionHistory = jest.fn();
@@ -449,5 +453,58 @@ describe('ArtifactEditCall', () => {
     expect(mockGetArtifactRevision).toHaveBeenCalledWith(
       expect.objectContaining({ identifier: 'dashboard', version: 2 }),
     );
+  });
+
+  it('does not let a stale open downgrade newer hydrated history', () => {
+    const olderHistory: ArtifactRevisionEntry[] = [
+      { id: 'dashboard-v1', version: 1, available: true },
+      { id: 'dashboard-v2', version: 2, available: true },
+    ];
+    const newerHistory: ArtifactRevisionEntry[] = [
+      ...olderHistory,
+      { id: 'dashboard-v3', version: 3, available: true },
+    ];
+    const artifact = (id: string, version: number, history: ArtifactRevisionEntry[]): Artifact => ({
+      id,
+      messageId: 'message-1',
+      identifier: 'dashboard',
+      content: `version ${version}`,
+      lastUpdateTime: version,
+      knaufRevision: { identifier: 'dashboard', version },
+      knaufRevisionHistory: history,
+    });
+
+    const merged = mergeArtifactRevisionRegistry({
+      current: { 'dashboard-v3': artifact('dashboard-v3', 3, newerHistory) },
+      additions: [artifact('dashboard-v2', 2, olderHistory)],
+      messageId: 'message-1',
+      identifier: 'dashboard',
+      history: olderHistory,
+    });
+
+    expect(merged['dashboard-v3']).toBeDefined();
+    expect(merged['dashboard-v2']?.knaufRevisionHistory).toEqual(newerHistory);
+
+    const upgraded = mergeArtifactRevisionRegistry({
+      current: { 'dashboard-v2': artifact('dashboard-v2', 2, olderHistory) },
+      additions: [artifact('dashboard-v3', 3, newerHistory)],
+      messageId: 'message-1',
+      identifier: 'dashboard',
+      history: newerHistory,
+    });
+    expect(upgraded['dashboard-v3']?.knaufRevisionHistory).toEqual(newerHistory);
+
+    const sparseHistory: ArtifactRevisionEntry[] = [
+      { id: null, version: 1, available: false },
+      ...newerHistory.slice(1),
+    ];
+    const availabilityPreserved = mergeArtifactRevisionRegistry({
+      current: { 'dashboard-v3': artifact('dashboard-v3', 3, newerHistory) },
+      additions: [],
+      messageId: 'message-1',
+      identifier: 'dashboard',
+      history: sparseHistory,
+    });
+    expect(availabilityPreserved['dashboard-v3']?.knaufRevisionHistory).toEqual(newerHistory);
   });
 });

@@ -131,20 +131,51 @@ export const mergeArtifactRevisionRegistry = ({
   history: ArtifactRevisionEntry[];
 }) => {
   const merged = { ...current };
+  const isStrongerHistory = (
+    candidate: ArtifactRevisionEntry[],
+    baseline: ArtifactRevisionEntry[],
+  ) => {
+    const version = (entries: ArtifactRevisionEntry[]) =>
+      entries.reduce((latest, revision) => Math.max(latest, revision.version), 0);
+    const candidateVersion = version(candidate);
+    const baselineVersion = version(baseline);
+    if (candidateVersion !== baselineVersion) {
+      return candidateVersion > baselineVersion;
+    }
+    const available = (entries: ArtifactRevisionEntry[]) =>
+      entries.filter((revision) => revision.available).length;
+    return available(candidate) > available(baseline);
+  };
+  const existingHistory = Object.values(merged).reduce<ArtifactRevisionEntry[] | null>(
+    (latest, artifact) => {
+      const candidate =
+        artifact?.messageId === messageId &&
+        artifact.knaufRevision?.identifier === identifier &&
+        artifact.knaufRevisionHistory?.length
+          ? artifact.knaufRevisionHistory
+          : null;
+      return candidate && (!latest || isStrongerHistory(candidate, latest)) ? candidate : latest;
+    },
+    null,
+  );
+  const effectiveHistory =
+    existingHistory && isStrongerHistory(existingHistory, history) ? existingHistory : history;
   const validIds = new Set(
-    history.flatMap((revision) => (revision.available && revision.id ? [revision.id] : [])),
+    effectiveHistory.flatMap((revision) =>
+      revision.available && revision.id ? [revision.id] : [],
+    ),
   );
   for (const [id, artifact] of Object.entries(merged)) {
     if (artifact?.messageId === messageId && artifact.knaufRevision?.identifier === identifier) {
       if (!validIds.has(id)) {
         delete merged[id];
       } else {
-        merged[id] = { ...artifact, knaufRevisionHistory: history };
+        merged[id] = { ...artifact, knaufRevisionHistory: effectiveHistory };
       }
     }
   }
   for (const artifact of additions) {
-    merged[artifact.id] = artifact;
+    merged[artifact.id] = { ...artifact, knaufRevisionHistory: effectiveHistory };
   }
   return merged;
 };

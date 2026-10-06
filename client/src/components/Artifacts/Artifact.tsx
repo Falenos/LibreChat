@@ -119,7 +119,9 @@ export function Artifact({
         messageId,
         index: artifactIndex,
         lastUpdateTime: now,
+        // [knauf] KK20-410 — carry the rendered locator only as a hydration hint.
         knaufRevision: { identifier, version },
+        // End [knauf]
       };
 
       // [knauf] KK20-410 — fork-owned hydration handles persisted revision lineages.

@@ -1,3 +1,4 @@
+// [knauf] KK20-410 — sparse persisted revision seam test.
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import ArtifactVersion from './ArtifactVersion';
@@ -33,7 +34,6 @@ jest.mock('~/hooks', () => ({
     values?.[0] ? `${key}:${values[0]}` : key,
 }));
 
-// [knauf] KK20-410 — sparse persisted revisions remain visible and unavailable gaps stay disabled.
 describe('ArtifactVersion', () => {
   it('labels sparse history with persisted version numbers', () => {
     const onVersionChange = jest.fn();

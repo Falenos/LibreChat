@@ -7,10 +7,12 @@ jest.mock('~/Providers', () => ({
   useArtifactsContext: jest.fn(),
 }));
 
+// [knauf] KK20-410 — exact revision service used by the fork-owned selector.
 const mockGetArtifactRevision = jest.fn();
 jest.mock('~/knauf/data-provider/data-service', () => ({
   getArtifactRevision: (...args: unknown[]) => mockGetArtifactRevision(...args),
 }));
+// End [knauf]
 
 jest.mock('~/utils', () => ({
   logger: {
@@ -23,7 +25,9 @@ jest.mock('~/store', () => ({
   __esModule: true,
   default: {
     artifactsState: { key: 'artifactsState' },
+    // [knauf] KK20-410 — selector cache registry.
     visibleArtifacts: { key: 'visibleArtifacts' },
+    // End [knauf]
     currentArtifactId: { key: 'currentArtifactId' },
     artifactsVisibility: { key: 'artifactsVisibility' },
   },
@@ -36,13 +40,17 @@ jest.mock('recoil', () => {
     useRecoilValue: jest.fn(),
     useRecoilState: jest.fn(),
     useResetRecoilState: jest.fn(),
+    // [knauf] KK20-410 — selector registry writers.
     useSetRecoilState: jest.fn(),
+    // End [knauf]
   };
 });
 
 /** Import mocked functions after mocking */
 import { useArtifactsContext } from '~/Providers';
+// [knauf] KK20-410 — selector registry writer mock.
 import { useRecoilValue, useRecoilState, useResetRecoilState, useSetRecoilState } from 'recoil';
+// End [knauf]
 import { logger } from '~/utils';
 import useArtifacts from '../useArtifacts';
 
@@ -50,8 +58,10 @@ describe('useArtifacts', () => {
   const mockResetArtifacts = jest.fn();
   const mockResetCurrentArtifactId = jest.fn();
   const mockSetCurrentArtifactId = jest.fn();
+  // [knauf] KK20-410 — selector registry writer spies.
   const mockSetArtifacts = jest.fn();
   const mockSetVisibleArtifacts = jest.fn();
+  // End [knauf]
 
   const createArtifact = (partial: Partial<Artifact>): Artifact => ({
     id: 'artifact-1',
@@ -73,6 +83,7 @@ describe('useArtifacts', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
+    // [knauf] KK20-410 — reset and bind the exact revision selector seam.
     mockGetArtifactRevision.mockReset();
 
     (useArtifactsContext as jest.Mock).mockReturnValue(defaultContext);
@@ -81,6 +92,7 @@ describe('useArtifacts', () => {
     (useSetRecoilState as jest.Mock).mockImplementation((atom) =>
       atom?.key === 'visibleArtifacts' ? mockSetVisibleArtifacts : mockSetArtifacts,
     );
+    // End [knauf]
     (useResetRecoilState as jest.Mock).mockImplementation((atom) => {
       if (atom?.key === 'artifactsState') {
         return mockResetArtifacts;

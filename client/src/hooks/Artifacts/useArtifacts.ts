@@ -225,9 +225,9 @@ export default function useArtifacts() {
     // theirs and survives the reconciliation above.
     setActiveTab: selectActiveTab,
     // End [knauf]
+    // [knauf] KK20-410 — expose the lineage-scoped selector model to the Preview panel.
     currentIndex: revisionSelection.currentIndex,
     currentArtifact: revisionSelection.currentArtifact,
-    // [knauf] KK20-410 — expose the lineage-scoped selector model to the Preview panel.
     artifactVersions: revisionSelection.artifactVersions,
     artifactVersionError: revisionSelection.artifactVersionError,
     isArtifactVersionLoading: revisionSelection.isArtifactVersionLoading,
