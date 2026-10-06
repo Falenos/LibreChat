@@ -98,7 +98,7 @@ describe('Artifact root revision binding', () => {
       children: <code>{'EDITED VERSION TWO'}</code>,
     } as ComponentProps<typeof Artifact> & { version: string };
 
-    const { rerender } = render(
+    render(
       <RecoilRoot>
         <Artifact {...props} />
         <Registry />
@@ -330,7 +330,7 @@ describe('Artifact root revision binding', () => {
       currentVersion: 2,
       revisions: [
         {
-          title: 'Versioning Probe',
+          title: 'Stale Versioning Probe',
           type: 'application/vnd.react',
           version: 1,
           available: true,
@@ -363,6 +363,7 @@ describe('Artifact root revision binding', () => {
     await waitFor(() =>
       expect(screen.getByTestId('artifact-registry')).toHaveTextContent('knaufRevisionHistory'),
     );
+    expect(screen.getByTestId('artifact-registry')).not.toHaveTextContent('Stale Versioning Probe');
 
     rerender(
       <RecoilRoot>
@@ -376,6 +377,7 @@ describe('Artifact root revision binding', () => {
     await waitFor(() =>
       expect(screen.getByTestId('artifact-registry')).toHaveTextContent('knaufRevisionHistory'),
     );
+    expect(screen.getByTestId('artifact-registry')).not.toHaveTextContent('Stale Versioning Probe');
     expect(mockGetArtifactRevisionHistory).toHaveBeenCalledTimes(1);
   });
 

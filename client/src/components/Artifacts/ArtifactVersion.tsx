@@ -17,7 +17,7 @@ export default function ArtifactVersion({
   versions,
   isLoading = false,
   onVersionChange,
-}: ArtifactVersionProps) {
+}: Readonly<ArtifactVersionProps>) {
   const localize = useLocalize();
   const [isPopoverActive, setIsPopoverActive] = useState(false);
   const isSmallScreen = useMediaQuery('(max-width: 768px)');

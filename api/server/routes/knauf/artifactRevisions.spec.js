@@ -73,6 +73,17 @@ describe('artifact revision route', () => {
     expect(response.body.content).toBe('<main>green</main>');
   });
 
+  it('rejects an invalid version before loading the owned conversation', async () => {
+    const app = express();
+    app.use(artifactRevisions);
+
+    const response = await request(app).get('/?messageId=message-1&identifier=dashboard&version=0');
+
+    expect(response.status).toBe(400);
+    expect(mockFindOne).not.toHaveBeenCalled();
+    expect(mockGetMessages).not.toHaveBeenCalled();
+  });
+
   it('returns the complete authenticated revision history', async () => {
     const app = express();
     app.use(artifactRevisions);

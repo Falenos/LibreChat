@@ -58,6 +58,9 @@ const resolveLatestArtifact = async ({
   return {
     ...currentArtifact,
     id: metadata?.id ?? artifactRevisionId({ ...lineage, version: authoritativeVersion }),
+    title: metadata?.title ?? currentArtifact.title,
+    type: metadata?.type ?? currentArtifact.type,
+    language: metadata?.language ?? currentArtifact.language,
     knaufRevision: { identifier: lineage.identifier, version: authoritativeVersion },
     knaufRevisionHistory: history,
   };
@@ -230,12 +233,15 @@ export default function useArtifactRevisionHydration({
           register([], revisionHistory);
           return true;
         }
+        const metadata = revisionHistory.find(
+          (revision) => revision.available && revision.version === authoritativeVersion,
+        );
         const latest = {
           ...currentArtifact,
-          id:
-            revisionHistory.find(
-              (revision) => revision.available && revision.version === authoritativeVersion,
-            )?.id ?? artifactRevisionId({ ...lineage, version: authoritativeVersion }),
+          id: metadata?.id ?? artifactRevisionId({ ...lineage, version: authoritativeVersion }),
+          title: metadata?.title ?? currentArtifact.title,
+          type: metadata?.type ?? currentArtifact.type,
+          language: metadata?.language ?? currentArtifact.language,
           knaufRevision: { identifier, version: authoritativeVersion },
           knaufRevisionHistory: revisionHistory,
         };

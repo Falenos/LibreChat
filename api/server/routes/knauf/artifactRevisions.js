@@ -73,19 +73,18 @@ router.get(
   ),
 );
 
-router.get(
-  '/',
-  handleRevisionRead(({ messages, messageId, identifier }, req) => {
-    const version = Number.parseInt(req.query.version, 10);
-    if (!Number.isSafeInteger(version) || version < 1) {
-      throw new ArtifactEditError('Invalid artifact revision.', 'invalid_version');
-    }
-    return getArtifactRevisionSnapshot(messages, {
+router.get('/', (req, res) => {
+  const version = Number.parseInt(req.query.version, 10);
+  if (!Number.isSafeInteger(version) || version < 1) {
+    return res.status(400).json({ message: 'Invalid artifact revision.' });
+  }
+  return handleRevisionRead(({ messages, messageId, identifier }) =>
+    getArtifactRevisionSnapshot(messages, {
       messageId,
       identifier,
       version,
-    });
-  }),
-);
+    }),
+  )(req, res);
+});
 
 module.exports = router;
