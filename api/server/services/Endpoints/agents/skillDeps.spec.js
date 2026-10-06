@@ -8,6 +8,18 @@ const mockCreateDeploymentSkillMethods = jest.fn((methods) => methods);
 // [knauf] KK20-243 — see the '@librechat/api' mock below.
 const mockCheckAccessWithRequestCache = jest.fn();
 // End [knauf]
+// [knauf] KK20-397 — the skill-file cache freshness pair. `skillToolDeps` is built at
+// module load, so the stand-in pair must exist before `require('./skillDeps')`.
+const mockCacheGetSessionInfo = jest.fn();
+const mockCacheCheckIfActive = jest.fn();
+// A plain function, not jest.fn: the call happens at module load, before the per-test
+// mock clearing, so its argument is recorded here instead of in `mock.calls`.
+let mockCacheProbe;
+const mockKnaufSkillCacheDeps = (probe) => {
+  mockCacheProbe = probe;
+  return { getSessionInfo: mockCacheGetSessionInfo, checkIfActive: mockCacheCheckIfActive };
+};
+// End [knauf]
 
 jest.mock('~/server/services/Files/strategies', () => ({
   getStrategyFunctions: (...args) => mockGetStrategyFunctions(...args),
@@ -39,6 +51,9 @@ jest.mock('@librechat/api', () => ({
   isDeploymentSkillFileSource: jest.fn(() => false),
   mergeDeploymentSkillIds: jest.fn((ids = []) => ids),
   resolveRequestTenantId: (...args) => mockResolveRequestTenantId(...args),
+  // [knauf] KK20-397 — exhaustive mock; see the declaration at the top.
+  knaufSkillCacheDeps: (...args) => mockKnaufSkillCacheDeps(...args),
+  // End [knauf]
 }));
 
 jest.mock('librechat-data-provider', () => ({
@@ -69,6 +84,21 @@ const mockDb = {
 jest.mock('~/models', () => mockDb);
 
 const { getSkillToolDeps, canUseSkills } = require('./skillDeps');
+
+/**
+ * [knauf] KK20-397 — `checkIfActive` is imported from Files/Code/process.js, which stopped
+ * exporting it in KK20-316; undefined, it silently disabled the skill-file cache. The
+ * knauf pair must be built from the real `getSessionInfo` and must win over the dead key.
+ */
+describe('[knauf] skill-file cache freshness wiring', () => {
+  it('builds the freshness pair from process.js getSessionInfo and lets it override', () => {
+    const { getSessionInfo } = require('~/server/services/Files/Code/process');
+    expect(mockCacheProbe).toBe(getSessionInfo);
+    const deps = getSkillToolDeps();
+    expect(deps.getSessionInfo).toBe(mockCacheGetSessionInfo);
+    expect(deps.checkIfActive).toBe(mockCacheCheckIfActive);
+  });
+});
 
 /**
  * [knauf] KK20-243 — the SKILLS.USE gate for the chat execution path.

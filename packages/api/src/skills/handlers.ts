@@ -41,6 +41,9 @@ import { listSkillsAvailableForCodeEnvironment } from '~/knauf/skills/capability
 import { isKnaufFileTranslationEnabled } from '~/knauf/translation/translationEnvGuard';
 // End [knauf]
 // End [knauf]
+// [knauf] KK20-397 — deployment-skill `sandbox/` files are never listed or downloadable.
+import { isSandboxOnlySkillFile } from '~/knauf/skills/sandboxOnlySkillFiles';
+// End [knauf]
 
 /** Thin error shape the skill methods throw on validation failure. */
 type SkillValidationError = Error & { code?: string; issues?: ValidationIssue[] };
@@ -599,7 +602,10 @@ export function createSkillsHandlers(deps: SkillsHandlersDeps): {
     try {
       const { id } = req.params as { id: string };
       const rows = await listSkillFiles(id);
-      const response: TListSkillFilesResponse = { files: rows.map(serializeSkillFile) };
+      // [knauf] KK20-397 — hide sandbox-only files (licensed fonts) from every client.
+      const visibleRows = rows.filter((row) => !isSandboxOnlySkillFile(row));
+      const response: TListSkillFilesResponse = { files: visibleRows.map(serializeSkillFile) };
+      // End [knauf]
       return res.status(200).json(response);
     } catch (error) {
       logger.error('[GET /skills/:id/files] Error listing skill files', error);
@@ -649,6 +655,11 @@ export function createSkillsHandlers(deps: SkillsHandlersDeps): {
       if (!file) {
         return res.status(404).json({ error: 'Skill file not found' });
       }
+      // [knauf] KK20-397 — sandbox-only files answer exactly like a missing one.
+      if (isSandboxOnlySkillFile(file)) {
+        return res.status(404).json({ error: 'Skill file not found' });
+      }
+      // End [knauf]
 
       const strategy = getStrategyFunctions(file.source);
       if (!strategy.getDownloadStream) {

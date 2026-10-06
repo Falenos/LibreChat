@@ -46,6 +46,9 @@ const {
   hydrateMissingIndexTokenCounts,
   injectSkillPrimes,
   collectFreshSkillPrimeNames,
+  // [knauf] KK20-397 — this turn's primes with their exact skill ids (see primeInvokedSkills).
+  collectKnaufFreshSkillPrimes,
+  // End [knauf]
   isSkillPrimeMessage,
   collectFileIds,
   processTextWithTokenLimit,
@@ -1291,9 +1294,17 @@ class AgentClient extends BaseClient {
       const tokenCounter = createTokenCounter(this.getEncoding());
 
       /** Pre-resolve invoked skill bodies + re-prime files before formatting messages */
+      // [knauf] KK20-397 — a skill primed THIS turn (manual `$name`, always-apply) gets its
+      // body below but, without this, its bundled files only from the next turn on. Passed
+      // with the `_id` each prime resolved to, so the files mounted are that skill's.
+      const knaufFreshPrimes = collectKnaufFreshSkillPrimes({
+        manualSkillPrimes: this.options.agent?.manualSkillPrimes,
+        alwaysApplySkillPrimes: this.options.agent?.alwaysApplySkillPrimes,
+      });
       const skillPrimeResult = this.options.primeInvokedSkills
-        ? await this.options.primeInvokedSkills(payload)
+        ? await this.options.primeInvokedSkills(payload, knaufFreshPrimes)
         : undefined;
+      // End [knauf]
 
       /**
        * Seed `Graph.sessions` with code-env files primed across every

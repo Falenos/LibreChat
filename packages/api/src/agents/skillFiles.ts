@@ -10,6 +10,10 @@ import { extractInvokedSkillsFromPayload } from './run';
 // the `skills.set(...)` call below.
 import { prepareSkillBodyForInjection } from '~/knauf/skills/skillPrimeBody';
 // End [knauf]
+// [knauf] KK20-397 — this turn's primes, pinned to the exact skill doc the resolver picked.
+import { knaufPinnedSkillIds } from '~/knauf/skills/freshSkillPrimes';
+import type { KnaufFreshSkillPrime } from '~/knauf/skills/freshSkillPrimes';
+// End [knauf]
 import { logAxiosError } from '~/utils';
 
 export interface SkillFileRecord {
@@ -125,9 +129,14 @@ export async function primeSkillFiles(
       const refsBySession = new Map<string, CodeEnvRef>();
       for (const sf of skillFiles) {
         const ref = sf.codeEnvRef;
-        if (ref && !refsBySession.has(ref.storage_session_id)) {
-          refsBySession.set(ref.storage_session_id, ref);
+        // [knauf] KK20-397 — staging expiry is per object (KK20-316), and code-adapter
+        // 0.4.0 only refreshes the files a run actually mounts, so one live sibling no
+        // longer proves the rest are live. Probe every object, not one per session.
+        const probeKey = ref ? `${ref.storage_session_id}/${ref.file_id}` : '';
+        if (ref && !refsBySession.has(probeKey)) {
+          refsBySession.set(probeKey, ref);
         }
+        // End [knauf]
       }
 
       try {
@@ -320,6 +329,12 @@ export interface PrimeInvokedSkillsDeps {
    *  path is skipped entirely — skill bodies still reconstruct for history
    *  rebuilds, but no sandbox traffic is generated. */
   codeEnvAvailable: boolean;
+  // [knauf] KK20-397 — skills primed THIS turn (manual `$name`, always-apply). Their body is
+  // injected by `injectSkillPrimes`, but only history `skill` calls reached this function, so
+  // their bundled files were not mounted until the following turn. Each carries the `_id` the
+  // resolver picked, and its lookup is pinned to it (see knauf/skills/freshSkillPrimes.ts).
+  extraSkills?: Iterable<KnaufFreshSkillPrime>;
+  // End [knauf]
   getSkillByName: (
     name: string,
     accessibleIds: Types.ObjectId[],
@@ -361,6 +376,12 @@ export async function primeInvokedSkills(
   }
 
   const invokedSkills = extractInvokedSkillsFromPayload(deps.payload);
+  // [knauf] KK20-397 — also mount the files of skills primed this turn, pinned to their docs.
+  const knaufPinned = knaufPinnedSkillIds(deps.extraSkills, deps.accessibleSkillIds);
+  for (const name of knaufPinned.keys()) {
+    invokedSkills.add(name);
+  }
+  // End [knauf]
   if (invokedSkills.size === 0) {
     return {};
   }
@@ -370,7 +391,13 @@ export async function primeInvokedSkills(
   // Phase 1: Resolve all skills in parallel (DB lookups)
   const resolveResults = await Promise.allSettled(
     Array.from(invokedSkills).map(async (skillName) => {
-      const skill = await deps.getSkillByName(skillName, deps.accessibleSkillIds);
+      // [knauf] KK20-397 — a skill primed this turn resolves to that exact doc, not by name.
+      const pinned = knaufPinned.get(skillName);
+      const skill = await deps.getSkillByName(
+        skillName,
+        pinned ? [pinned] : deps.accessibleSkillIds,
+      );
+      // End [knauf]
       return skill ?? undefined;
     }),
   );
@@ -424,9 +451,12 @@ export async function primeInvokedSkills(
       if (resolvedWithRef.length > 0 && resolvedWithRef.length === allResolved.length) {
         const refsBySession = new Map<string, CodeEnvRef>();
         for (const { ref } of resolvedWithRef) {
-          if (ref && !refsBySession.has(ref.storage_session_id)) {
-            refsBySession.set(ref.storage_session_id, ref);
+          // [knauf] KK20-397 — probe every object, not one per session (see primeSkillFiles).
+          const probeKey = ref ? `${ref.storage_session_id}/${ref.file_id}` : '';
+          if (ref && !refsBySession.has(probeKey)) {
+            refsBySession.set(probeKey, ref);
           }
+          // End [knauf]
         }
 
         const checkResults = await Promise.all(

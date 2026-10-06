@@ -102,6 +102,8 @@ than disabling the limit.
 | ACA file operation | 30 seconds | `ACA_FILE_OP_TIMEOUT_MS` | Bounds each upload/download operation. |
 | Session deletion | 10 seconds | `ACA_SESSION_DELETE_TIMEOUT_MS` | Cleanup cannot delay the response indefinitely. |
 | LibreChat helper | 350 seconds | `CODE_EXEC_HELPER_TIMEOUT_MS` | Must exceed the adapter's complete request deadline. |
+| Visual-QA images | 8 per response, 4 MiB each; off by default | `KNAUF_CODE_VISUAL_QA_MAX_IMAGES`, `KNAUF_CODE_VISUAL_QA_ENABLED` (LibreChat) | Each image costs roughly 1k input tokens and mid-run images bypass the Langfuse image guard (KK20-397). |
+| Skill-file cache reuse | Needs 1 hour of staging life left; off by default | `KNAUF_CODE_SKILL_FILE_CACHE` (LibreChat) | A reused staged copy must outlive the run that mounts it (KK20-397). |
 | Preview extraction | 60 seconds | preview finalization | Expensive or failed previews become download-only. |
 | Staged-file retention | 24 hours, sliding | `FILE_TTL_HOURS` | Files survive multiple executions but eventually expire. |
 | Reaper | Hourly, 120-second lease | reaper configuration | Allows one replica to clean storage without duplicate work. |

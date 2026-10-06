@@ -17,6 +17,12 @@ import {
 import type { ValidationIssue } from '@librechat/data-schemas';
 import type { CodeEnvRef } from 'librechat-data-provider';
 import { parseFrontmatter, guessMimeType } from './import';
+// [knauf] KK20-397 — tenant-scoped staging refs for the skill-file cache.
+import {
+  recallDeploymentSkillCodeEnvRef,
+  rememberDeploymentSkillCodeEnvRef,
+} from '~/knauf/skills/deploymentSkillCodeEnvCache';
+// End [knauf]
 
 export const DEPLOYMENT_SKILLS_DIR_ENV = 'DEPLOYMENT_SKILLS_DIR';
 export const DEFAULT_DEPLOYMENT_SKILLS_DIR = 'skill';
@@ -324,6 +330,10 @@ export class DeploymentSkillRegistry {
         continue;
       }
       file.codeEnvRef = update.codeEnvRef;
+      // [knauf] KK20-397 — the line above writes onto the process-wide registry object,
+      // i.e. whichever tenant primed last. Keep the ref per tenant for the cache instead.
+      rememberDeploymentSkillCodeEnvRef(update.skillId, update.relativePath, update.codeEnvRef);
+      // End [knauf]
     }
     return dbUpdates;
   }
@@ -939,6 +949,15 @@ function toAlwaysApplyRow(skill: DeploymentSkill): AlwaysApplySkillRow {
 
 function toSkillFileRow(file: DeploymentSkillFile): SkillFileRow {
   const { codeEnvRef: _codeEnvRef, content: _content, isBinary: _isBinary, ...row } = file;
+  // [knauf] KK20-397 — with no ref on the listed row, `primeSkillFiles` can never reuse a
+  // staged copy and re-uploads every file of a deployment skill on every invocation. Hand
+  // out this tenant's ref when KNAUF_CODE_SKILL_FILE_CACHE=true (undefined otherwise).
+  const knaufRef = recallDeploymentSkillCodeEnvRef(file.skillId, file.relativePath);
+  if (knaufRef) {
+    const withRef: SkillFileRow & { codeEnvRef: CodeEnvRef } = { ...row, codeEnvRef: knaufRef };
+    return withRef;
+  }
+  // End [knauf]
   return row;
 }
 
