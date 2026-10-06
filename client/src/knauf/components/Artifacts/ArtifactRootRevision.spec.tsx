@@ -330,7 +330,7 @@ describe('Artifact root revision binding', () => {
       currentVersion: 2,
       revisions: [
         {
-          title: 'Stale Versioning Probe',
+          title: 'Versioning Probe',
           type: 'application/vnd.react',
           version: 1,
           available: true,
@@ -348,7 +348,7 @@ describe('Artifact root revision binding', () => {
       id: 'ignored',
       lastUpdateTime: 0,
       identifier: 'versioning-probe',
-      title: 'Versioning Probe',
+      title: 'Stale Versioning Probe',
       type: 'application/vnd.react',
       version: '2',
       children: <code>{'EDITED VERSION TWO'}</code>,

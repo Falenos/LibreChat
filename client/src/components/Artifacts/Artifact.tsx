@@ -170,8 +170,12 @@ export function Artifact({
   ]);
 
   useEffect(() => {
+    const throttledUpdate = throttledUpdateRef.current;
     resetCounter();
     updateArtifact();
+    // [knauf] KK20-410 — cancel trailing hydration when props change or the owner unmounts.
+    return () => throttledUpdate.cancel();
+    // End [knauf]
   }, [updateArtifact, resetCounter]);
 
   return <ArtifactButton artifact={artifact} />;
