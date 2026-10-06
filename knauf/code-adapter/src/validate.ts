@@ -136,10 +136,39 @@ export function parseIdentity(input: {
   return { kind: kind as CodeEnvKind, id, ...(version != null ? { version } : {}) };
 }
 
+/** Deepest nested path a staged file may have (`a/b/…/file` = segments). */
+export const FILENAME_MAX_DEPTH = 12;
+const FILENAME_SEGMENT_MAX_BYTES = 255;
+/** Wrapper-owned names (`.karl_in_<n>`, `.karl_files.json`, the logs) — never user files. */
+const RESERVED_PREFIX = '.karl_';
+const DIR_SEGMENT_ASCII_RE = /^[a-zA-Z0-9._-]$/;
+const DIR_SEGMENT_UNICODE_RE = /^[\p{L}\p{M}\p{N}\p{Emoji}\u200d._-]$/u;
+
+/**
+ * Directory segments follow LibreChat's own rule for sending a nested name at all
+ * (`isSafeCodeEnvFilepath`, packages/api/src/files/code/form.ts): ASCII must be
+ * `[a-zA-Z0-9._-]`, anything else a letter, mark, number or emoji. LibreChat falls back to
+ * the bare basename for every other path, so anything outside this set did not come from
+ * it. The last segment stays permissive — user filenames with spaces are sent flat.
+ */
+function isSafeDirSegment(segment: string): boolean {
+  for (const char of segment) {
+    const ok =
+      char.charCodeAt(0) <= 0x7f
+        ? DIR_SEGMENT_ASCII_RE.test(char)
+        : DIR_SEGMENT_UNICODE_RE.test(char);
+    if (!ok) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Filename safety, mirroring packages/api/src/files/code/form.ts rules:
  * relative, no `..`/empty segments, no control chars, no backslashes.
- * Nested paths (e.g. `reports/out.png`) are allowed.
+ * Nested paths (e.g. `reports/out.png`, `karl-docx/scripts/karl_docx.py`) are allowed,
+ * bounded in depth and segment length, and may not claim the wrapper's `.karl_` names.
  */
 export function sanitizeFilename(raw: unknown): string {
   if (typeof raw !== 'string' || raw.trim() === '') {
@@ -157,10 +186,22 @@ export function sanitizeFilename(raw: unknown): string {
     throw new ValidationError('filename must be a relative path');
   }
   const segments = name.split('/');
-  for (const segment of segments) {
+  if (segments.length > FILENAME_MAX_DEPTH) {
+    throw new ValidationError('filename is nested too deeply');
+  }
+  for (const [index, segment] of segments.entries()) {
     if (segment === '' || segment === '.' || segment === '..') {
       throw new ValidationError('filename contains invalid path segments');
     }
+    if (Buffer.byteLength(segment, 'utf8') > FILENAME_SEGMENT_MAX_BYTES) {
+      throw new ValidationError('filename contains an over-long path segment');
+    }
+    if (index < segments.length - 1 && !isSafeDirSegment(segment)) {
+      throw new ValidationError('filename contains invalid directory characters');
+    }
+  }
+  if (segments[0]!.startsWith(RESERVED_PREFIX)) {
+    throw new ValidationError('filename uses a reserved name');
   }
   return segments.join('/');
 }

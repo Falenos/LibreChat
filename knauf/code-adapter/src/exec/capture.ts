@@ -6,6 +6,7 @@ import type { AcaClient } from '../azure/acaClient.js';
 import { ACA_FILE_MANIFEST_TRUNCATED_NAME } from '../types/aca.js';
 import type { AcaSessionFile } from '../types/aca.js';
 import type { BlobStore } from '../azure/blobStore.js';
+import { CapturedOverwriteForbiddenError } from '../store/filesRepo.js';
 import type { FilesRepo } from '../store/filesRepo.js';
 import type { AuthContext, ExecResponseFile } from '../types/contract.js';
 import type { ResolvedInput } from './stagePush.js';
@@ -71,6 +72,8 @@ export function baselineFrom(listing: AcaSessionFile[]): Map<string, string> {
  *  - changed writable / new   → captured under the exec session (storage_session_id = exec sid)
  *  - pre-existing & unchanged → skipped (already delivered when first created)
  *  - `.karl_*` wrapper files  → never captured
+ *  - hidden segments, `__pycache__/`, `*.pyc` → never captured (CAPTURE_IGNORE_HIDDEN)
+ *  - a name owned by a read-only / foreign file → refused, reported, not replaced
  */
 export async function captureOutputs(params: {
   sessionId: string;
@@ -119,6 +122,7 @@ export async function captureOutputs(params: {
   let capturedBytes = 0;
   let overflow = false;
   let failed = 0;
+  const protectedNames: string[] = [];
   // Wall-clock deadline for the whole phase. Without it the file/byte caps still allow
   // captureMaxFiles sequential fetches at fileOpTimeoutMs each, which outlives the HTTP
   // response and loses every already-persisted file with it.
@@ -132,7 +136,7 @@ export async function captureOutputs(params: {
       overflow = true;
       continue;
     }
-    if (!isCapturable(name, entry)) {
+    if (!isCapturable(name, entry, config.exec.captureIgnoreHidden)) {
       continue;
     }
     if (Date.now() > deadline) {
@@ -183,6 +187,8 @@ export async function captureOutputs(params: {
     } else if (result === 'timeout') {
       timedOut = true;
       break;
+    } else if (result === 'protected') {
+      protectedNames.push(name);
     } else if (result == null) {
       // The file is really in the sandbox; we just could not persist it (ACA fetch, Table
       // upsert or Blob write failed). Counted so the caller can say so — dropping it
@@ -208,13 +214,22 @@ export async function captureOutputs(params: {
     );
   }
 
+  const failedNotes: string[] = [];
+  if (failed > 0) {
+    failedNotes.push(
+      `Note: ${failed} file(s) the code produced could not be saved and are not attached. ` +
+        'The code itself ran successfully — re-run it to try again.',
+    );
+  }
+  if (protectedNames.length > 0) {
+    failedNotes.push(
+      `Note: ${protectedNames.join(', ')} could not be saved: that name belongs to a ` +
+        'read-only file. Write the result under a new file name instead.',
+    );
+  }
   return {
     files,
-    failedNote:
-      failed > 0
-        ? `Note: ${failed} file(s) the code produced could not be saved and are not attached. ` +
-          'The code itself ran successfully — re-run it to try again.'
-        : null,
+    failedNote: failedNotes.length > 0 ? failedNotes.join('\n') : null,
     overflowNote: buildOverflowNote(overflow, timedOut, config),
   };
 }
@@ -299,8 +314,24 @@ function planEntry(
   return { action: 'capture', input: null };
 }
 
+/**
+ * Tool litter, not deliverables: a hidden segment anywhere in the path (`.~lock.x.xlsx#`,
+ * `.config/libreoffice/…`), Python bytecode. Belt-and-braces with the wrapper's own walk
+ * filter — a pool listing that bypasses the manifest must not reintroduce them.
+ */
+function isToolLitter(name: string): boolean {
+  return (
+    name.split('/').some((segment) => segment.startsWith('.') || segment === '__pycache__') ||
+    name.endsWith('.pyc')
+  );
+}
+
 /** A listing entry is capturable if it's a real, non-wrapper, non-directory file. */
-function isCapturable(name: string | undefined, entry: AcaSessionFile): name is string {
+function isCapturable(
+  name: string | undefined,
+  entry: AcaSessionFile,
+  ignoreHidden: boolean,
+): name is string {
   if (
     name == null ||
     name === '' ||
@@ -308,6 +339,9 @@ function isCapturable(name: string | undefined, entry: AcaSessionFile): name is 
     name === OUT_LOG ||
     name === ERR_LOG
   ) {
+    return false;
+  }
+  if (ignoreHidden && isToolLitter(name)) {
     return false;
   }
   return entry.type?.toLowerCase() !== 'directory';
@@ -371,7 +405,9 @@ async function captureNewFile(
   remainingBytes: number,
   remainingMs: number,
   ctx: CaptureCtx,
-): Promise<{ file: ExecResponseFile; bytes: number } | 'overflow' | 'timeout' | null> {
+): Promise<
+  { file: ExecResponseFile; bytes: number } | 'overflow' | 'timeout' | 'protected' | null
+> {
   const { sessionId, auth, deps, signal } = ctx;
   signal?.throwIfAborted();
   if ((entry.sizeInBytes ?? remainingBytes) > remainingBytes) {
@@ -463,6 +499,17 @@ async function captureNewFile(
     if (signal?.aborted) {
       throw signal.reason ?? new DOMException('Aborted', 'AbortError');
     }
+    if (err instanceof CapturedOverwriteForbiddenError) {
+      // The refusal happens before any metadata write, so the candidate is unreferenced.
+      await deps.blob.delete(candidateBlobPath, signal).catch((error) => {
+        deps.logger.warn(
+          { blobPath: candidateBlobPath, err: (error as Error).message },
+          'refused capture blob cleanup failed',
+        );
+      });
+      deps.logger.warn({ file: name }, 'capture refused: name belongs to a protected file');
+      return 'protected';
+    }
     if (candidateUploaded) {
       deps.logger.warn(
         { file: name, blobPath: candidateBlobPath },
@@ -477,7 +524,11 @@ async function captureNewFile(
 function echoInput(input: ResolvedInput): ExecResponseFile {
   return {
     id: input.doc.fileId,
-    name: input.doc.filename,
+    // The path the client asked for, not the staged filename. They differ for an object
+    // staged flat before path preservation; echoing the flat name made @librechat/agents
+    // keep BOTH names for one object (it merges by id but keeps a different-named entry),
+    // so the next exec pushed the same file twice.
+    name: input.finalName,
     path: `/mnt/data/${input.finalName}`,
     storage_session_id: input.doc.sessionId,
     inherited: true,

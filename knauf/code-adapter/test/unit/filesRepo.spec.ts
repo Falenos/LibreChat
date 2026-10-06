@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  CapturedOverwriteForbiddenError,
   FILE_SCHEMA_VERSION,
   FilesRepo,
   TableSchemaError,
@@ -124,6 +125,28 @@ describe('Table-backed FilesRepo', () => {
     expect(result.obsoleteBlobPaths).toEqual([first.blobPath]);
     expect(table.allEntities().some((entity) => entity.rowKey === `b:${first.fileId}`)).toBe(false);
     expect(table.allEntities().some((entity) => entity.lookupValue === newBlobPath)).toBe(true);
+  });
+
+  // [knauf] KK20-397 (A6) — a capture has no authority over read-only, non-user or
+  // foreign files that happen to share its partition and name.
+  it('refuses to replace an active read-only, skill or foreign-user file', async () => {
+    const readOnly = await repo.insertStaged(input({ filename: 'ro.md', readOnly: true }));
+    await expect(repo.upsertCaptured(input({ filename: 'ro.md' }), candidate())).rejects.toThrow(
+      CapturedOverwriteForbiddenError,
+    );
+    expect((await repo.find(sessionId, readOnly.fileId))?.blobPath).toBe(readOnly.blobPath);
+
+    await repo.insertStaged(
+      input({ filename: 'skill.md', identity: { kind: 'skill', id: 's', version: 1 } }),
+    );
+    await expect(repo.upsertCaptured(input({ filename: 'skill.md' }), candidate())).rejects.toThrow(
+      CapturedOverwriteForbiddenError,
+    );
+
+    await repo.insertStaged(input({ filename: 'theirs.csv', userId: 'user-2' }));
+    await expect(
+      repo.upsertCaptured(input({ filename: 'theirs.csv' }), candidate()),
+    ).rejects.toThrow(CapturedOverwriteForbiddenError);
   });
 
   it('rereads the concurrent create winner and updates that stable fileId', async () => {

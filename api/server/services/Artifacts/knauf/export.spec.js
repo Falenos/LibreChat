@@ -34,7 +34,7 @@ const setSlideCount = (pageCount, height = 900) => {
       return height;
     }
     if (source.includes('button.click')) {
-      return true;
+      return { advanced: true, usesContract: true };
     }
     if (source.includes("querySelectorAll('button')")) {
       return pageCount;
@@ -213,7 +213,7 @@ describe('artifact renderer', () => {
         return 900;
       }
       if (source.includes('button.click')) {
-        return true;
+        return { advanced: true, usesContract: true };
       }
       if (source.includes("querySelectorAll('button')")) {
         return 3;
@@ -251,6 +251,149 @@ describe('artifact renderer', () => {
     });
     expect(mockSetContent.mock.calls[0][0].match(/data:image\/png;base64/g)).toHaveLength(3);
     expect(mockScreenshot).toHaveBeenCalledTimes(4);
+  });
+
+  it('uses structural counters and numbered controls for custom paginated artifacts', async () => {
+    mockPreviewEvaluate.mockImplementation(async (callback) => {
+      const source = callback.toString();
+      if (source.includes('scrollHeight')) {
+        return 900;
+      }
+      if (source.includes('hasNumberedControl')) {
+        return 12;
+      }
+      if (source.includes('numberedButton')) {
+        return { advanced: true, usesContract: false };
+      }
+      return undefined;
+    });
+
+    await renderArtifact(artifact, 'pdf');
+
+    expect(mockScreenshot).toHaveBeenCalledTimes(12);
+    const pageCountEvaluator = mockPreviewEvaluate.mock.calls
+      .map(([callback]) => callback)
+      .find(
+        (callback) =>
+          callback.toString().includes("querySelectorAll('body *')") &&
+          callback.toString().includes('hasNumberedControl'),
+      );
+    const second = {
+      disabled: false,
+      textContent: '2',
+      getAttribute: () => null,
+      click: jest.fn(),
+    };
+    const counter = { childElementCount: 0, textContent: 'Section 1 / 12' };
+    global.document = {
+      querySelector: () => null,
+      querySelectorAll: (selector) => {
+        if (selector === 'button') {
+          return [second];
+        }
+        if (selector === 'body *') {
+          return [counter];
+        }
+        return [];
+      },
+    };
+    try {
+      expect(pageCountEvaluator(false)).toBe(12);
+      const advanceEvaluator = mockPreviewEvaluate.mock.calls
+        .map(([callback]) => callback)
+        .find((callback) => callback.toString().includes('numberedButton'));
+      global.window = {};
+      expect(advanceEvaluator(2)).toEqual({ advanced: true, usesContract: false });
+      expect(second.click).toHaveBeenCalled();
+    } finally {
+      delete global.document;
+      delete global.window;
+    }
+  });
+
+  it('fails closed when legacy navigation does not advance the structural counter', async () => {
+    mockPreviewEvaluate.mockImplementation(async (callback) => {
+      const source = callback.toString();
+      if (source.includes('scrollHeight')) {
+        return 900;
+      }
+      if (source.includes('hasNumberedControl')) {
+        return 2;
+      }
+      if (source.includes('numberedButton')) {
+        return { advanced: true, usesContract: false };
+      }
+      return undefined;
+    });
+    mockPreviewWaitForFunction.mockImplementation(async (callback) => {
+      if (callback.toString().includes('expected') && callback.toString().includes('total')) {
+        throw new Error('counter did not advance');
+      }
+    });
+
+    await expect(renderArtifact(artifact, 'pdf')).rejects.toThrow(
+      'Artifact page navigation failed',
+    );
+    expect(mockScreenshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not click an unrelated control when legacy pagination is ambiguous', async () => {
+    await renderArtifact(artifact, 'pdf');
+
+    const pageCountEvaluator = mockPreviewEvaluate.mock.calls
+      .map(([callback]) => callback)
+      .find((callback) => callback.toString().includes('hasNumberedControl'));
+    const unrelated = {
+      disabled: false,
+      textContent: 'Clear fields',
+      getAttribute: () => null,
+      click: jest.fn(),
+    };
+    const counter = { childElementCount: 0, textContent: 'Step 1 / 4' };
+    global.document = {
+      querySelector: () => null,
+      querySelectorAll: (selector) => {
+        if (selector === 'button') {
+          return [unrelated];
+        }
+        if (selector === 'body *') {
+          return [counter];
+        }
+        return [];
+      },
+    };
+    try {
+      expect(pageCountEvaluator(false)).toBe(0);
+      expect(unrelated.click).not.toHaveBeenCalled();
+    } finally {
+      delete global.document;
+    }
+  });
+
+  it('keeps later taller pages intact without stretching shorter screenshots', async () => {
+    const measuredHeights = [900, 900, 1100, 1100, 1300, 1300];
+    mockPreviewEvaluate.mockImplementation(async (callback) => {
+      const source = callback.toString();
+      if (source.includes('scrollHeight')) {
+        return measuredHeights.shift() ?? 1300;
+      }
+      if (source.includes('button.click')) {
+        return { advanced: true, usesContract: true };
+      }
+      if (source.includes("querySelectorAll('button')")) {
+        return 3;
+      }
+      return undefined;
+    });
+
+    await renderArtifact(artifact, 'pdf');
+
+    expect(mockSetViewportSize).toHaveBeenLastCalledWith({ width: 1440, height: 1300 });
+    expect(mockPdf).toHaveBeenCalledWith(
+      expect.objectContaining({ width: '1440px', height: '1300px' }),
+    );
+    expect(mockSetContent.mock.calls[0][0]).toContain('height:auto');
+    expect(mockSetContent.mock.calls[0][0]).not.toContain('img{display:block;width:1440px;height:1300px');
   });
 
   it('exports a 25-slide PDF', async () => {

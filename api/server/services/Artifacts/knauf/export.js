@@ -273,35 +273,73 @@ const getPreviewPageCount = (previewFrame, requireSlideContract) =>
     if (requiresContract) {
       return 0;
     }
-    const nextButton = [...document.querySelectorAll('button')].find((button) =>
-      /^next\b/i.test((button.getAttribute('aria-label') || button.textContent || '').trim()),
-    );
-    if (!nextButton || nextButton.disabled) {
-      return 1;
-    }
     const counter = [...document.querySelectorAll('body *')].find(
       (element) =>
-        element.childElementCount === 0 && /^1\s*\/\s*\d+$/.test(element.textContent?.trim() ?? ''),
+        element.childElementCount === 0 &&
+        /(?:^|\s)1\s*\/\s*(\d+)\s*$/u.test(element.textContent?.trim() ?? ''),
     );
-    return Number(counter?.textContent?.trim().match(/^1\s*\/\s*(\d+)$/)?.[1]) || 1;
+    const total = Number(counter?.textContent?.trim().match(/1\s*\/\s*(\d+)\s*$/u)?.[1]);
+    const enabledButtons = [...document.querySelectorAll('button')].filter(
+      (button) => !button.disabled,
+    );
+    const hasNumberedControl = enabledButtons.some((button) => {
+      const label = button.getAttribute('aria-label')?.trim();
+      const text = button.textContent?.trim();
+      return label === '2' || text === '2';
+    });
+    const hasSemanticControl = enabledButtons.some((button) => {
+      const label = button.getAttribute('aria-label')?.trim() ?? '';
+      const text = button.textContent?.trim() ?? '';
+      return (
+        /^(?:next|continue|start)\b/iu.test(label) || /^(?:next|continue|start)\b/iu.test(text)
+      );
+    });
+    if (total > 1) {
+      return hasNumberedControl || hasSemanticControl ? total : 0;
+    }
+    return 1;
   }, requireSlideContract);
 
-const advancePreviewPage = (previewFrame) =>
-  previewFrame.evaluate(() => {
-    const button =
-      document.querySelector('[data-knauf-export-next]') ||
-      [...document.querySelectorAll('button')].find((candidate) =>
-        /^next\b/i.test(
-          (candidate.getAttribute('aria-label') || candidate.textContent || '').trim(),
-        ),
+const advancePreviewPage = (previewFrame, expectedPage) =>
+  previewFrame.evaluate((nextPage) => {
+    const contractButton = document.querySelector('[data-knauf-export-next]');
+    const enabledButtons = [...document.querySelectorAll('button')].filter(
+      (candidate) => !candidate.disabled,
+    );
+    const numberedButton = enabledButtons.find((candidate) => {
+      const label = candidate.getAttribute('aria-label')?.trim();
+      const text = candidate.textContent?.trim();
+      return label === String(nextPage) || text === String(nextPage);
+    });
+    const semanticButton = enabledButtons.find((candidate) => {
+      const label = candidate.getAttribute('aria-label')?.trim() ?? '';
+      const text = candidate.textContent?.trim() ?? '';
+      return (
+        /^(?:next|continue|start)\b/iu.test(label) || /^(?:next|continue|start)\b/iu.test(text)
       );
+    });
+    const button = contractButton || numberedButton || semanticButton;
     if (!button || button.disabled) {
-      return false;
+      return { advanced: false, usesContract: Boolean(contractButton) };
     }
     window.__knaufArtifactExportState = { markup: '', since: performance.now() };
     button.click();
-    return true;
-  });
+    return { advanced: true, usesContract: Boolean(contractButton) };
+  }, expectedPage);
+
+const waitForLegacyPage = (previewFrame, expectedPage, totalPages) =>
+  previewFrame.waitForFunction(
+    ({ expected, total }) =>
+      [...document.querySelectorAll('body *')].some((element) => {
+        if (element.childElementCount !== 0) {
+          return false;
+        }
+        const match = element.textContent?.trim().match(/(?:^|\s)(\d+)\s*\/\s*(\d+)\s*$/u);
+        return Number(match?.[1]) === expected && Number(match?.[2]) === total;
+      }),
+    { expected: expectedPage, total: totalPages },
+    { timeout: EXPORT_TIMEOUT_MS },
+  );
 
 const renderArtifact = async (input, format) => {
   const artifact = validateArtifact(input);
@@ -342,7 +380,7 @@ const renderArtifact = async (input, format) => {
       throw new ArtifactExportError('Artifact preview did not start', 500);
     }
     await waitForStablePreview(previewFrame, requireSlideContract);
-    const height = await fitPreviewFrame(page, previewFrame, requireSlideContract);
+    let height = await fitPreviewFrame(page, previewFrame, requireSlideContract);
     const pageCount = await getPreviewPageCount(previewFrame, requireSlideContract);
     if (pageCount < 1) {
       throw new ArtifactExportError('Artifact preview did not become ready', 500);
@@ -365,13 +403,42 @@ const renderArtifact = async (input, format) => {
     }
     const screenshots = [];
     let screenshotBytes = 0;
+    let renderedHeight = 0;
     for (let index = 0; index < pageCount; index += 1) {
       if (index > 0) {
-        if (!(await advancePreviewPage(previewFrame))) {
+        const navigation = await advancePreviewPage(previewFrame, index + 1);
+        if (!navigation.advanced) {
           throw new ArtifactExportError('Artifact page navigation failed', 500);
+        }
+        if (!navigation.usesContract) {
+          try {
+            await waitForLegacyPage(previewFrame, index + 1, pageCount);
+          } catch (error) {
+            throw new ArtifactExportError('Artifact page navigation failed', 500, {
+              cause: error,
+            });
+          }
         }
         await waitForStablePreview(previewFrame, requireSlideContract);
         await previewFrame.evaluate(async () => document.fonts?.ready);
+        height = Math.max(
+          height,
+          await fitPreviewFrame(page, previewFrame, requireSlideContract),
+        );
+      }
+      const currentHeight = await previewFrame.evaluate(() =>
+        Math.max(document.body.scrollHeight, document.documentElement.scrollHeight),
+      );
+      renderedHeight += currentHeight;
+      if (format === 'png' && renderedHeight > MAX_PNG_HEIGHT) {
+        throw new ArtifactExportError('Artifact is too tall to export as PNG', 413, {
+          code: 'artifact_png_height_limit',
+          details: {
+            format,
+            actualPages: pageCount,
+            maxPages: Math.max(1, index),
+          },
+        });
       }
       const screenshot = Buffer.from(await page.screenshot({ type: 'png', fullPage: true }));
       screenshotBytes += screenshot.length;
@@ -392,7 +459,7 @@ const renderArtifact = async (input, format) => {
         )
         .join('');
       await page.setContent(
-        `<style>@page{size:${VIEWPORT.width}px ${height}px;margin:0}html,body{margin:0;width:${VIEWPORT.width}px}img{display:block;width:${VIEWPORT.width}px;height:${height}px;break-after:page}img:last-child{break-after:auto}</style>${images}`,
+        `<style>@page{size:${VIEWPORT.width}px ${height}px;margin:0}html,body{margin:0;width:${VIEWPORT.width}px}img{display:block;width:${VIEWPORT.width}px;height:auto;break-after:page}img:last-child{break-after:auto}</style>${images}`,
         { waitUntil: 'load', timeout: EXPORT_TIMEOUT_MS },
       );
       output =

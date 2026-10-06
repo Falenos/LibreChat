@@ -23,6 +23,36 @@ const frame = `<!doctype html>
   </body>
 </html>`;
 
+const paginatedFrame = `<!doctype html>
+<html>
+  <body style="margin:0"></body>
+  <script>
+    const total = 12;
+    let page = 1;
+    const render = () => {
+      const height = page === 11 ? 1200 : 900;
+      document.body.innerHTML =
+        '<main style="min-height:' + height + 'px;background:#fff;padding:24px">' +
+        '<p>Section ' + page + ' / ' + total + '</p>' +
+        '<div style="height:' + (height - 160) + 'px">Content ' + page + '</div>' +
+        '<nav>' +
+        Array.from({ length: total }, (_, index) => {
+          const target = index + 1;
+          return '<button type="button" data-page="' + target + '"' +
+            (target === page ? ' disabled' : '') + '>' + target + '</button>';
+        }).join('') +
+        '</nav></main>';
+      for (const button of document.querySelectorAll('button[data-page]')) {
+        button.addEventListener('click', () => {
+          page = Number(button.dataset.page);
+          render();
+        });
+      }
+    };
+    render();
+  </script>
+</html>`;
+
 const shell = `<!doctype html>
 <html>
   <body style="margin:0">
@@ -50,6 +80,7 @@ const close = (server) =>
     jest.setTimeout(60_000);
 
     let server;
+    let activeFrame;
     let previousBaseUrl;
     let previousChromiumPath;
 
@@ -57,9 +88,10 @@ const close = (server) =>
       previousBaseUrl = process.env.ARTIFACT_EXPORT_BASE_URL;
       previousChromiumPath = process.env.CHROMIUM_PATH;
       process.env.CHROMIUM_PATH = chromiumPath;
+      activeFrame = frame;
       server = http.createServer((request, response) => {
         response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        response.end(request.url === '/frame' ? frame : shell);
+        response.end(request.url === '/frame' ? activeFrame : shell);
       });
       const port = await listen(server);
       process.env.ARTIFACT_EXPORT_BASE_URL = `http://127.0.0.1:${port}`;
@@ -96,6 +128,24 @@ const close = (server) =>
       const pdfSource = pdf.buffer.toString('latin1');
       expect(pdfSource).toMatch(/\/MediaBox\s*\[0 0 1080 2400\]/);
       expect(pdfSource).toMatch(/\/Width\s+1440\s*\/Height\s+3200/);
+    });
+
+    it('exports every state from a structurally paginated artifact', async () => {
+      activeFrame = paginatedFrame;
+      try {
+        const artifact = {
+          title: 'Interactive training',
+          type: 'application/vnd.react',
+          content: '<main>Training</main>',
+        };
+        const pdf = await renderArtifact(artifact, 'pdf');
+        const pdfSource = pdf.buffer.toString('latin1');
+
+        expect(pdfSource.match(/\/Type\s*\/Page\b/g)).toHaveLength(12);
+        expect(pdfSource).toMatch(/\/Width\s+1440\s*\/Height\s+1248/);
+      } finally {
+        activeFrame = frame;
+      }
     });
   },
 );

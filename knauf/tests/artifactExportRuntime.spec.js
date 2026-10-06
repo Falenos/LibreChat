@@ -46,6 +46,8 @@ test('the platform slide renderer owns the language-independent export contract'
   const slides = read('skill/karl-artifacts/references/slides.md');
   const renderer = read('client/src/knauf/sandbox/slideDeckModule.ts');
   assert.match(skill, /\/knauf\/slides/);
+  assert.match(skill, /data-knauf-export-pages=\{total\}/);
+  assert.match(skill, /data-knauf-export-next/);
   assert.match(slides, /import \{ KnaufSlideDeck \} from '\/knauf\/slides'/);
   assert.doesNotMatch(slides, /function Slide\(/);
   assert.match(renderer, /data-knauf-export-pages=\{total\}/);
