@@ -12,6 +12,7 @@ const TOOL_NAME = 'edit_artifact';
 const MAX_REPLACEMENTS = 25;
 const MAX_REPLACEMENT_BYTES = 512 * 1024;
 const MAX_CONTEXT_ARTIFACTS = 10;
+const MAX_ARTIFACT_REVISIONS = 250;
 
 class ArtifactEditError extends Error {
   constructor(message, code, status = 400) {
@@ -405,6 +406,67 @@ function getArtifactRevisionSnapshot(messages, { messageId, identifier, version 
   };
 }
 
+function getArtifactRevisionHistory(messages, { messageId, identifier }) {
+  const sourceMessage = messages.find((message) => message.messageId === messageId);
+  const target = sourceMessage ? findLatestArtifact([sourceMessage], identifier) : null;
+  if (!target) {
+    throw new ArtifactEditError('Artifact not found', 'artifact_not_found', 404);
+  }
+
+  const title = readAttribute(target.boundary, 'title') || identifier;
+  const type = readAttribute(target.boundary, 'type');
+  const language = readAttribute(target.boundary, 'language');
+  const currentVersion = readVersion(target.boundary);
+  if (currentVersion > MAX_ARTIFACT_REVISIONS) {
+    throw new ArtifactEditError(
+      'Artifact version history is too large',
+      'revision_history_too_large',
+      413,
+    );
+  }
+  const revisions = readStoredRevisions(messages, messageId, identifier);
+  const snapshots = [];
+  let content = readArtifactContent(target.boundary);
+  let historyAvailable = true;
+
+  for (let version = currentVersion; version >= 1; version -= 1) {
+    snapshots.unshift(
+      historyAvailable
+        ? {
+            title,
+            type,
+            content,
+            version,
+            ...(language ? { language } : {}),
+          }
+        : { version, available: false },
+    );
+    if (version === 1 || !historyAvailable) {
+      continue;
+    }
+
+    const revision = revisions.get(version);
+    if (!revision || sha256(content) !== revision.content_sha256) {
+      historyAvailable = false;
+      continue;
+    }
+    for (let patchIndex = revision.inverse_patches.length - 1; patchIndex >= 0; patchIndex -= 1) {
+      const patch = revision.inverse_patches[patchIndex];
+      if (patch.start + patch.new_length > content.length) {
+        historyAvailable = false;
+        break;
+      }
+      content =
+        content.slice(0, patch.start) + patch.old + content.slice(patch.start + patch.new_length);
+    }
+    if (historyAvailable && sha256(content) !== revision.base_sha256) {
+      historyAvailable = false;
+    }
+  }
+
+  return { currentVersion, revisions: snapshots };
+}
+
 const defaultGetMessages = (...args) => require('~/models').getMessages(...args);
 
 const compareAndSwapMessage = async (
@@ -522,6 +584,7 @@ module.exports = {
   buildArtifactEditContext,
   compareAndSwapMessage,
   createEditArtifactTool,
+  getArtifactRevisionHistory,
   getArtifactRevisionSnapshot,
   sha256,
 };

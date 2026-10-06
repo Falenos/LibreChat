@@ -5,15 +5,15 @@ const { requireJwtAuth } = require('~/server/middleware');
 const { getMessages } = require('~/models');
 const {
   ArtifactEditError,
+  getArtifactRevisionHistory,
   getArtifactRevisionSnapshot,
 } = require('~/server/services/Artifacts/knauf/edit');
 
 const router = express.Router();
 router.use(requireJwtAuth);
 
-router.get('/', async (req, res) => {
+const readArtifactLocator = async (req, res) => {
   const { messageId, identifier } = req.query;
-  const version = Number.parseInt(req.query.version, 10);
   if (
     typeof messageId !== 'string' ||
     messageId.length === 0 ||
@@ -22,34 +22,39 @@ router.get('/', async (req, res) => {
     identifier.length === 0 ||
     identifier.length > 160 ||
     /[\r\n\0]/.test(messageId) ||
-    /[\r\n\0]/.test(identifier) ||
-    !Number.isSafeInteger(version) ||
-    version < 1
+    /[\r\n\0]/.test(identifier)
   ) {
-    return res.status(400).json({ message: 'Invalid artifact revision.' });
+    res.status(400).json({ message: 'Invalid artifact revision.' });
+    return null;
   }
 
-  try {
-    const source = await mongoose.models.Message.findOne({
-      user: req.user.id,
-      messageId,
-    })
-      .select('conversationId')
-      .lean();
-    if (!source) {
-      return res.status(404).json({ message: 'Artifact not found.' });
-    }
-    const messages = await getMessages({
+  const source = await mongoose.models.Message.findOne({
+    user: req.user.id,
+    messageId,
+  })
+    .select('conversationId')
+    .lean();
+  if (!source) {
+    res.status(404).json({ message: 'Artifact not found.' });
+    return null;
+  }
+  return {
+    messageId,
+    identifier,
+    messages: await getMessages({
       user: req.user.id,
       conversationId: source.conversationId,
-    });
-    return res.json(
-      getArtifactRevisionSnapshot(messages, {
-        messageId,
-        identifier,
-        version,
-      }),
-    );
+    }),
+  };
+};
+
+const handleRevisionRead = (reader) => async (req, res) => {
+  try {
+    const locator = await readArtifactLocator(req, res);
+    if (!locator) {
+      return;
+    }
+    return res.json(reader(locator, req));
   } catch (error) {
     const status = error instanceof ArtifactEditError ? error.status : 500;
     if (status === 500) {
@@ -59,6 +64,28 @@ router.get('/', async (req, res) => {
       message: status === 500 ? 'Failed to load artifact revision.' : error.message,
     });
   }
-});
+};
+
+router.get(
+  '/history',
+  handleRevisionRead(({ messages, messageId, identifier }) =>
+    getArtifactRevisionHistory(messages, { messageId, identifier }),
+  ),
+);
+
+router.get(
+  '/',
+  handleRevisionRead(({ messages, messageId, identifier }, req) => {
+    const version = Number.parseInt(req.query.version, 10);
+    if (!Number.isSafeInteger(version) || version < 1) {
+      throw new ArtifactEditError('Invalid artifact revision.', 'invalid_version');
+    }
+    return getArtifactRevisionSnapshot(messages, {
+      messageId,
+      identifier,
+      version,
+    });
+  }),
+);
 
 module.exports = router;

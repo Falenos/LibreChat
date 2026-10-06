@@ -11,9 +11,18 @@ import { logger, isArtifactRoute } from '~/utils';
 // see the call site in `updateArtifact` below.
 import { extractArtifactBody } from '~/knauf/utils/artifactBody';
 // End [knauf]
-import { artifactsState } from '~/store/artifacts';
-// [knauf] NO-TICKET — keep the original artifact card bound to revision 1.
-import { getArtifactRevision } from '~/knauf/data-provider/data-service';
+import { artifactsState, visibleArtifacts } from '~/store/artifacts';
+// [knauf] KK20-410 — hydrate the complete immutable revision lineage.
+import {
+  getArtifactRevision,
+  getArtifactRevisionHistory,
+} from '~/knauf/data-provider/data-service';
+import {
+  artifactRevisionId,
+  artifactRootId,
+  isArtifactRevisionHistoryUnavailable,
+  projectArtifactRevisionHistory,
+} from '~/knauf/utils/artifactRevisions';
 // End [knauf]
 import ArtifactButton from './ArtifactButton';
 
@@ -60,9 +69,12 @@ export function Artifact({
   const artifactIndex = useRef(getNextIndex(false)).current;
 
   const setArtifacts = useSetRecoilState(artifactsState);
+  const setVisibleArtifacts = useSetRecoilState(visibleArtifacts);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   // [knauf] NO-TICKET — keep Version 1's sort position stable across later revisions.
   const rootRevisionTimeRef = useRef<{ artifactKey: string; time: number } | null>(null);
+  const historyRequestRef = useRef(0);
+  const loadedHistoryRef = useRef<string | null>(null);
   // End [knauf]
 
   const throttledUpdateRef = useRef(
@@ -89,9 +101,7 @@ export function Artifact({
     const identifier = props.identifier ?? defaultIdentifier;
     const parsedVersion = Number.parseInt(String(props.version ?? 1), 10);
     const version = Number.isSafeInteger(parsedVersion) && parsedVersion > 0 ? parsedVersion : 1;
-    const artifactKey = `${identifier}_${type}_${title}_${messageId}`
-      .replace(/\s+/g, '_')
-      .toLowerCase();
+    const artifactKey = artifactRootId({ identifier, type, title, messageId });
 
     throttledUpdateRef.current(() => {
       const now = Date.now();
@@ -108,45 +118,96 @@ export function Artifact({
         messageId,
         index: artifactIndex,
         lastUpdateTime: now,
+        knaufRevision: { identifier, version },
       };
 
-      // [knauf] NO-TICKET — the backend advances the source message in place but
-      // retains inverse patches. Expose the new source under its immutable revision
-      // id, then reconstruct V1 for the original message card instead of overwriting it.
+      // [knauf] KK20-410 — the backend advances the source message in place but
+      // retains inverse patches. Hydrate every reconstructable snapshot in one
+      // authenticated read so the selector does not depend on which chat cards
+      // happened to mount or get clicked.
       if (version > 1 && isArtifactRoute(location.pathname)) {
-        const revisionId = `artifact-revision:${messageId}:${identifier}:version:${version}`;
-        setArtifacts((artifacts) => ({
+        const revisionId = artifactRevisionId({ messageId, identifier, version });
+        const latest = { ...currentArtifact, id: revisionId };
+        const historyKey = `${messageId}:${identifier}:${version}`;
+        const registerLatest = (artifacts: Record<string, Artifact | undefined> | null) => ({
           ...artifacts,
-          [revisionId]: {
-            ...currentArtifact,
-            id: revisionId,
-            knaufRevision: { identifier, version },
-          } as Artifact,
-        }));
-        void getArtifactRevision({ messageId, identifier, version: 1 })
-          .then((snapshot) => {
+          [revisionId]: latest,
+        });
+        setArtifacts(registerLatest);
+        setVisibleArtifacts(registerLatest);
+
+        if (loadedHistoryRef.current === historyKey) {
+          return;
+        }
+        loadedHistoryRef.current = historyKey;
+        const requestId = ++historyRequestRef.current;
+        void getArtifactRevisionHistory({ messageId, identifier })
+          .then((history) => {
+            if (requestId !== historyRequestRef.current) {
+              return;
+            }
             const previousRoot = rootRevisionTimeRef.current;
             const rootRevisionTime =
               previousRoot?.artifactKey === artifactKey ? previousRoot.time : now - 1;
             rootRevisionTimeRef.current = { artifactKey, time: rootRevisionTime };
-            const original = {
-              ...currentArtifact,
-              ...snapshot,
-              id: artifactKey,
-              lastUpdateTime: rootRevisionTime,
-              knaufRevision: { identifier, version: 1 },
-            };
-            setArtifacts((artifacts) => ({ ...artifacts, [artifactKey]: original }));
-            setArtifact(original);
+            const { artifacts: revisions } = projectArtifactRevisionHistory({
+              history,
+              base: currentArtifact,
+              rootTime: rootRevisionTime,
+            });
+            const registerHistory = (artifacts: Record<string, Artifact | undefined> | null) => ({
+              ...artifacts,
+              ...revisions,
+            });
+            setArtifacts(registerHistory);
+            setVisibleArtifacts(registerHistory);
+            setArtifact(revisions[artifactKey] ?? revisions[revisionId] ?? latest);
           })
-          .catch(() => {
-            setArtifacts((artifacts) => ({ ...artifacts, [artifactKey]: currentArtifact }));
-            setArtifact(currentArtifact);
+          .catch(async (error) => {
+            if (requestId !== historyRequestRef.current) {
+              return;
+            }
+            if (!isArtifactRevisionHistoryUnavailable(error)) {
+              setArtifact(latest);
+              return;
+            }
+            try {
+              const snapshot = await getArtifactRevision({
+                messageId,
+                identifier,
+                version: 1,
+              });
+              if (requestId !== historyRequestRef.current) {
+                return;
+              }
+              const original = {
+                ...currentArtifact,
+                ...snapshot,
+                id: artifactKey,
+                lastUpdateTime: now - 1,
+                knaufRevision: { identifier, version: 1 },
+              };
+              const registerOriginal = (
+                artifacts: Record<string, Artifact | undefined> | null,
+              ) => ({
+                ...artifacts,
+                [artifactKey]: original,
+              });
+              setArtifacts(registerOriginal);
+              setVisibleArtifacts(registerOriginal);
+              setArtifact(original);
+            } catch {
+              if (requestId === historyRequestRef.current) {
+                setArtifact(latest);
+              }
+            }
           });
         return;
       }
       // End [knauf]
 
+      historyRequestRef.current += 1;
+      loadedHistoryRef.current = null;
       if (!isArtifactRoute(location.pathname)) {
         return setArtifact(currentArtifact);
       }
@@ -177,6 +238,7 @@ export function Artifact({
     messageId,
     artifactIndex,
     location.pathname,
+    setVisibleArtifacts,
   ]);
 
   useEffect(() => {

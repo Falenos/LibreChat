@@ -3,6 +3,7 @@ const {
   buildArtifactEditContext,
   compareAndSwapMessage,
   createEditArtifactTool,
+  getArtifactRevisionHistory,
   getArtifactRevisionSnapshot,
   sha256,
 } = require('./edit');
@@ -114,6 +115,50 @@ describe('edit_artifact', () => {
     );
   });
 
+  test('increments versions per artifact identifier instead of using the conversation artifact count', async () => {
+    const reportSource = 'export default function Report() { return <p>report v1</p>; }';
+    const dashboard = {
+      messageId: 'assistant-dashboard',
+      conversationId: 'conversation-1',
+      user: 'user-1',
+      text: artifact(
+        'dashboard',
+        'export default function Dashboard() { return <p>dashboard v4</p>; }',
+      ).replace('title="Demo"', 'title="Demo" version="4"'),
+    };
+    const report = {
+      messageId: 'assistant-report',
+      conversationId: 'conversation-1',
+      user: 'user-1',
+      text: artifact('report', reportSource),
+    };
+    const compareAndSwap = jest.fn().mockResolvedValue(true);
+
+    const result = await applyArtifactEdit(
+      {
+        userId: 'user-1',
+        conversationId: 'conversation-1',
+        identifier: 'report',
+        expectedSha256: sha256(reportSource),
+        replacements: [{ old: 'v1', new: 'v2' }],
+      },
+      {
+        getMessages: jest.fn().mockResolvedValue([dashboard, report]),
+        compareAndSwap,
+      },
+    );
+
+    expect(result).toEqual(expect.objectContaining({ identifier: 'report', version: 2 }));
+    expect(compareAndSwap).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 'assistant-report',
+        updated: expect.stringContaining('identifier="report"'),
+      }),
+    );
+    expect(compareAndSwap.mock.calls[0][0].updated).toContain('version="2"');
+    expect(compareAndSwap.mock.calls[0][0].updated).not.toContain('version="5"');
+  });
+
   test('ART-EDIT-009 preserves imports, styles, and icons outside a minimal model edit', async () => {
     const source = `import { Card } from '/components/ui/card';
 
@@ -211,6 +256,62 @@ export default function Dashboard() {
       type: 'application/vnd.react',
       content: 'The theme colour is green.',
       version: 2,
+    });
+  });
+
+  test('projects complete ordered history and marks versions before a missing patch unavailable', () => {
+    const source = 'The theme colour is orange.';
+    const colourStart = 'The theme colour is '.length;
+    const messages = [
+      {
+        messageId: 'assistant-1',
+        text: artifact('dashboard', source).replace('title="Demo"', 'title="Demo" version="4"'),
+      },
+      {
+        messageId: 'assistant-4',
+        content: [
+          {
+            type: 'tool_call',
+            tool_call: {
+              name: 'edit_artifact',
+              output: JSON.stringify({
+                status: 'updated',
+                identifier: 'dashboard',
+                messageId: 'assistant-1',
+                version: 4,
+                base_sha256: sha256('The theme colour is pink.'),
+                content_sha256: sha256(source),
+                inverse_patches: [{ start: colourStart, old: 'pink', new_length: 'orange'.length }],
+              }),
+            },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      getArtifactRevisionHistory(messages, {
+        messageId: 'assistant-1',
+        identifier: 'dashboard',
+      }),
+    ).toEqual({
+      currentVersion: 4,
+      revisions: [
+        { version: 1, available: false },
+        { version: 2, available: false },
+        {
+          title: 'Demo',
+          type: 'application/vnd.react',
+          content: 'The theme colour is pink.',
+          version: 3,
+        },
+        {
+          title: 'Demo',
+          type: 'application/vnd.react',
+          content: source,
+          version: 4,
+        },
+      ],
     });
   });
 

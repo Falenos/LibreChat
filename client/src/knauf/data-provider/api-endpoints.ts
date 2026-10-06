@@ -34,6 +34,8 @@ export const artifactRevision = (params: {
     identifier: params.identifier,
     version: String(params.version),
   }).toString()}`;
+export const artifactRevisionHistory = (params: { messageId: string; identifier: string }) =>
+  `${knaufBase}/artifact-revisions/history?${new URLSearchParams(params).toString()}`;
 
 // KK20-195 WP5 — async-indexing status/retry. These live under upstream's
 // /api/files (Knauf [knauf]-seamed routes in api/server/routes/files/files.js),

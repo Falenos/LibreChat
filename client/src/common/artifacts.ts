@@ -17,6 +17,13 @@ export interface Artifact {
   // [knauf] Server-owned locator for generated file artifacts; content is never trusted from the client. (NO-TICKET)
   sourceFileId?: string;
   // End [knauf]
+  // [knauf] KK20-410 — immutable revision identity for generated chat artifacts.
+  knaufRevision?: {
+    identifier: string;
+    version: number;
+  };
+  knaufUnavailableVersions?: number[];
+  // End [knauf]
 }
 
 export type ArtifactFiles =

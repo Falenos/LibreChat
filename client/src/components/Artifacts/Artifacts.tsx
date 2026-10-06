@@ -97,7 +97,9 @@ export default function Artifacts() {
     setActiveTab,
     currentIndex,
     currentArtifact,
-    orderedArtifactIds,
+    // [knauf] KK20-410 — traverse only the selected artifact's persisted revision lineage.
+    artifactVersions,
+    // End [knauf]
     setCurrentArtifactId,
   } = useArtifacts();
 
@@ -324,18 +326,23 @@ export default function Artifacts() {
               {displayedTab !== 'preview' && isMutating && (
                 <RefreshCw size={16} className="animate-spin text-text-secondary" />
               )}
-              {orderedArtifactIds.length > 1 && (
+              {/* [knauf] KK20-410 — render persisted version labels without mixing artifact identities. */}
+              {artifactVersions.length > 1 && (
                 <ArtifactVersion
                   currentIndex={currentIndex}
-                  totalVersions={orderedArtifactIds.length}
+                  versions={artifactVersions.map(({ version, available }) => ({
+                    version,
+                    available,
+                  }))}
                   onVersionChange={(index) => {
-                    const target = orderedArtifactIds[index];
+                    const target = artifactVersions[index]?.id;
                     if (target) {
                       setCurrentArtifactId(target);
                     }
                   }}
                 />
               )}
+              {/* End [knauf] */}
               <CopyButton isCopied={isCopied} iconOnly onClick={handleCopyArtifact} />
               {/* [knauf] Source + rendered PNG/PDF exports share one menu. (NO-TICKET) */}
               <ArtifactDownloadMenu artifact={currentArtifact} />

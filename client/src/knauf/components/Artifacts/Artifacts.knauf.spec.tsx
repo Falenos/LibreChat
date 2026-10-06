@@ -19,6 +19,7 @@ jest.mock('~/hooks/Artifacts/useArtifacts', () => ({
     setActiveTab: jest.fn(),
     currentIndex: 0,
     currentArtifact: sharedArtifact,
+    artifactVersions: [],
     orderedArtifactIds: ['artifact-1'],
     setCurrentArtifactId: jest.fn(),
   }),

@@ -552,20 +552,48 @@ describe('useArtifacts', () => {
   });
 
   describe('currentIndex calculation', () => {
-    it('should return correct index for current artifact', () => {
+    // [knauf] KK20-410 — version traversal follows persisted lineage, not timestamps or other artifacts.
+    it('scopes and orders versions by immutable artifact revision metadata', () => {
       const artifacts = {
-        'artifact-1': createArtifact({ id: 'artifact-1', lastUpdateTime: 1000 }),
-        'artifact-2': createArtifact({ id: 'artifact-2', lastUpdateTime: 2000 }),
-        'artifact-3': createArtifact({ id: 'artifact-3', lastUpdateTime: 3000 }),
+        'dashboard-v3': createArtifact({
+          id: 'dashboard-v3',
+          title: 'Executive dashboard',
+          lastUpdateTime: 1000,
+          knaufRevision: { identifier: 'dashboard', version: 3 },
+        }),
+        'other-v1': createArtifact({
+          id: 'other-v1',
+          messageId: 'msg-2',
+          lastUpdateTime: 2000,
+          knaufRevision: { identifier: 'other', version: 1 },
+        }),
+        'dashboard-v1': createArtifact({
+          id: 'dashboard-v1',
+          title: 'Sales dashboard',
+          lastUpdateTime: 3000,
+          knaufRevision: { identifier: 'dashboard', version: 1 },
+        }),
+        'dashboard-v2': createArtifact({
+          id: 'dashboard-v2',
+          title: 'Revenue dashboard',
+          lastUpdateTime: 4000,
+          knaufRevision: { identifier: 'dashboard', version: 2 },
+        }),
       };
 
       (useRecoilValue as jest.Mock).mockReturnValue(artifacts);
-      (useRecoilState as jest.Mock).mockReturnValue(['artifact-2', mockSetCurrentArtifactId]);
+      (useRecoilState as jest.Mock).mockReturnValue(['dashboard-v2', mockSetCurrentArtifactId]);
 
       const { result } = renderHook(() => useArtifacts());
 
       expect(result.current.currentIndex).toBe(1);
+      expect(result.current.artifactVersions).toEqual([
+        { id: 'dashboard-v1', version: 1, available: true },
+        { id: 'dashboard-v2', version: 2, available: true },
+        { id: 'dashboard-v3', version: 3, available: true },
+      ]);
     });
+    // End [knauf]
 
     it('should return -1 for non-existent artifact', () => {
       const artifacts = {

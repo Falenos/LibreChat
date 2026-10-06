@@ -3,7 +3,15 @@ import { useRecoilState, useSetRecoilState } from 'recoil';
 import type { Artifact } from '~/common';
 import FilePreview from '~/components/Chat/Input/Files/FilePreview';
 import { useLocalize } from '~/hooks';
-import { getArtifactRevision } from '~/knauf/data-provider/data-service';
+import {
+  getArtifactRevision,
+  getArtifactRevisionHistory,
+} from '~/knauf/data-provider/data-service';
+import {
+  artifactRevisionId,
+  isArtifactRevisionHistoryUnavailable,
+  projectArtifactRevisionHistory,
+} from '~/knauf/utils/artifactRevisions';
 import store from '~/store';
 import { getFileType } from '~/utils';
 
@@ -46,7 +54,7 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
   const [visibleArtifacts, setVisibleArtifacts] = useRecoilState(store.visibleArtifacts);
   const setCurrentArtifactId = useSetRecoilState(store.currentArtifactId);
   const setArtifactsVisible = useSetRecoilState(store.artifactsVisibility);
-  const revisionId = `artifact-revision:${result.messageId}:${result.identifier}:version:${result.version}`;
+  const revisionId = artifactRevisionId(result);
 
   const openArtifact = (artifact: Artifact) => {
     setArtifacts((current) => ({ ...(current ?? {}), [artifact.id]: artifact }));
@@ -57,7 +65,7 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
 
   const handleOpen = async () => {
     const cached = artifacts?.[revisionId] ?? visibleArtifacts?.[revisionId];
-    if (cached) {
+    if (cached?.knaufUnavailableVersions != null) {
       openArtifact(cached);
       return;
     }
@@ -65,22 +73,45 @@ export default function ArtifactEditCall({ result }: Readonly<{ result: Artifact
     setFailed(false);
     setIsLoading(true);
     try {
-      const snapshot = await getArtifactRevision(result);
-      openArtifact({
-        id: revisionId,
-        identifier: result.identifier,
-        messageId: result.messageId,
-        title: snapshot.title,
-        type: snapshot.type,
-        content: snapshot.content,
-        language: snapshot.language,
-        lastUpdateTime: Date.now(),
-        knaufRevision: { identifier: result.identifier, version: result.version },
-      } as Artifact & {
-        knaufRevision: { identifier: string; version: number };
+      const history = await getArtifactRevisionHistory(result);
+      const { artifacts: revisions } = projectArtifactRevisionHistory({
+        history,
+        base: {
+          identifier: result.identifier,
+          messageId: result.messageId,
+        },
+        rootTime: Date.now() - history.currentVersion,
       });
-    } catch {
-      setFailed(true);
+      const selected = revisions[revisionId];
+      if (!selected) {
+        setFailed(true);
+        return;
+      }
+      setArtifacts((current) => ({ ...(current ?? {}), ...revisions }));
+      setVisibleArtifacts((current) => ({ ...(current ?? {}), ...revisions }));
+      setCurrentArtifactId(selected.id);
+      setArtifactsVisible(true);
+    } catch (error) {
+      if (!isArtifactRevisionHistoryUnavailable(error)) {
+        setFailed(true);
+        return;
+      }
+      try {
+        const snapshot = await getArtifactRevision(result);
+        openArtifact({
+          id: revisionId,
+          identifier: result.identifier,
+          messageId: result.messageId,
+          title: snapshot.title,
+          type: snapshot.type,
+          content: snapshot.content,
+          language: snapshot.language,
+          lastUpdateTime: Date.now(),
+          knaufRevision: { identifier: result.identifier, version: result.version },
+        });
+      } catch {
+        setFailed(true);
+      }
     } finally {
       setIsLoading(false);
     }

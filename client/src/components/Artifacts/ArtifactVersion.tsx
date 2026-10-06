@@ -4,15 +4,16 @@ import { History, Check } from 'lucide-react';
 import { DropdownPopup, TooltipAnchor, Button, useMediaQuery } from '@librechat/client';
 import { useLocalize } from '~/hooks';
 
+// [knauf] KK20-410 — display persisted artifact revision numbers and unavailable gaps.
 interface ArtifactVersionProps {
   currentIndex: number;
-  totalVersions: number;
+  versions: Array<{ version: number; available: boolean }>;
   onVersionChange: (index: number) => void;
 }
 
 export default function ArtifactVersion({
   currentIndex,
-  totalVersions,
+  versions,
   onVersionChange,
 }: ArtifactVersionProps) {
   const localize = useLocalize();
@@ -26,13 +27,18 @@ export default function ArtifactVersion({
     setIsPopoverActive(false);
   };
 
-  if (totalVersions <= 1) {
+  if (versions.length <= 1) {
     return null;
   }
 
-  const options = Array.from({ length: totalVersions }, (_, index) => ({
+  const options = versions.map(({ version, available }, index) => ({
     value: index.toString(),
-    label: localize('com_ui_version_var', { 0: String(index + 1) }),
+    label: available
+      ? localize('com_ui_version_var', { 0: String(version) })
+      : `${localize('com_ui_version_var', { 0: String(version) })} — ${localize(
+          'com_ui_unavailable',
+        )}`,
+    available,
   }));
 
   const dropdownItems = options.map((option) => {
@@ -41,6 +47,7 @@ export default function ArtifactVersion({
       label: option.label,
       onClick: () => handleValueChange(option.value),
       value: option.value,
+      disabled: !option.available,
       icon: isSelected ? (
         <Check size={16} className="text-text-primary" aria-hidden="true" />
       ) : undefined,
@@ -82,3 +89,4 @@ export default function ArtifactVersion({
     />
   );
 }
+// End [knauf]

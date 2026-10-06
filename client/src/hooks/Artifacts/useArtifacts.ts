@@ -207,9 +207,41 @@ export default function useArtifacts() {
     }
   }, [latestMessageId]);
 
+  // [knauf] KK20-410 — derive traversal from immutable lineage metadata, not global render order.
   const currentArtifact = currentArtifactId != null ? artifacts?.[currentArtifactId] : null;
-
-  const currentIndex = orderedArtifactIds.indexOf(currentArtifactId ?? '');
+  const artifactVersions = useMemo(() => {
+    const revision = currentArtifact?.knaufRevision;
+    if (!revision || !currentArtifact?.messageId) {
+      return [];
+    }
+    const availableVersions = Object.values(artifacts ?? {})
+      .filter(
+        (artifact): artifact is NonNullable<typeof artifact> =>
+          artifact != null &&
+          artifact.messageId === currentArtifact.messageId &&
+          artifact.knaufRevision?.identifier === revision.identifier,
+      )
+      .sort(
+        (left, right) => (left.knaufRevision?.version ?? 0) - (right.knaufRevision?.version ?? 0),
+      )
+      .map((artifact) => ({
+        id: artifact.id,
+        version: artifact.knaufRevision?.version ?? 0,
+        available: true,
+      }));
+    const versions = new Map<number, { id: string | null; version: number; available: boolean }>(
+      (currentArtifact.knaufUnavailableVersions ?? []).map((version) => [
+        version,
+        { id: null, version, available: false },
+      ]),
+    );
+    for (const available of availableVersions) {
+      versions.set(available.version, available);
+    }
+    return [...versions.values()].sort((left, right) => left.version - right.version);
+  }, [artifacts, currentArtifact]);
+  const currentIndex = artifactVersions.findIndex(({ id }) => id === currentArtifactId);
+  // End [knauf]
 
   return {
     activeTab,
@@ -219,6 +251,9 @@ export default function useArtifacts() {
     // End [knauf]
     currentIndex,
     currentArtifact,
+    // [knauf] KK20-410 — expose the lineage-scoped selector model to the Preview panel.
+    artifactVersions,
+    // End [knauf]
     orderedArtifactIds,
     setCurrentArtifactId,
   };

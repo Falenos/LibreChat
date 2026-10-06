@@ -2,6 +2,7 @@ const express = require('express');
 const request = require('supertest');
 
 const mockGetMessages = jest.fn();
+const mockGetArtifactRevisionHistory = jest.fn();
 const mockGetArtifactRevisionSnapshot = jest.fn();
 const mockLean = jest.fn();
 const mockSelect = jest.fn(() => ({ lean: mockLean }));
@@ -24,6 +25,7 @@ jest.mock('~/models', () => ({
 
 jest.mock('~/server/services/Artifacts/knauf/edit', () => ({
   ArtifactEditError: class ArtifactEditError extends Error {},
+  getArtifactRevisionHistory: (...args) => mockGetArtifactRevisionHistory(...args),
   getArtifactRevisionSnapshot: (...args) => mockGetArtifactRevisionSnapshot(...args),
 }));
 
@@ -41,6 +43,13 @@ describe('artifact revision route', () => {
       type: 'text/html',
       content: '<main>green</main>',
       version: 2,
+    });
+    mockGetArtifactRevisionHistory.mockReturnValue({
+      currentVersion: 2,
+      revisions: [
+        { title: 'Dashboard', type: 'text/html', content: '<main>blue</main>', version: 1 },
+        { title: 'Dashboard', type: 'text/html', content: '<main>green</main>', version: 2 },
+      ],
     });
   });
 
@@ -62,5 +71,19 @@ describe('artifact revision route', () => {
       version: 2,
     });
     expect(response.body.content).toBe('<main>green</main>');
+  });
+
+  it('returns the complete authenticated revision history', async () => {
+    const app = express();
+    app.use(artifactRevisions);
+
+    const response = await request(app).get('/history?messageId=message-1&identifier=dashboard');
+
+    expect(response.status).toBe(200);
+    expect(mockGetArtifactRevisionHistory).toHaveBeenCalledWith([{ messageId: 'message-1' }], {
+      messageId: 'message-1',
+      identifier: 'dashboard',
+    });
+    expect(response.body.revisions).toHaveLength(2);
   });
 });

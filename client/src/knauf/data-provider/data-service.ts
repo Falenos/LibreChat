@@ -181,12 +181,28 @@ export interface ArtifactRevisionSnapshot extends ArtifactExportSnapshot {
   version: number;
 }
 
+export type ArtifactRevisionHistoryItem =
+  | ArtifactRevisionSnapshot
+  | { version: number; available: false };
+
+export interface ArtifactRevisionHistory {
+  currentVersion: number;
+  revisions: ArtifactRevisionHistoryItem[];
+}
+
 export function getArtifactRevision(params: {
   messageId: string;
   identifier: string;
   version: number;
 }): Promise<ArtifactRevisionSnapshot> {
   return request.get(endpoints.artifactRevision(params));
+}
+
+export function getArtifactRevisionHistory(params: {
+  messageId: string;
+  identifier: string;
+}): Promise<ArtifactRevisionHistory> {
+  return request.get(endpoints.artifactRevisionHistory(params));
 }
 
 // KK20-195 WP5 — async file-indexing status + retry (plan §6.3/§6.4).
